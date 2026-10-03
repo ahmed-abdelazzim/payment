@@ -1,0 +1,8 @@
+{
+  "name": "Sarraf Ops - Real-time Payment Telemetry",
+  "description": "Real-time payment transaction monitoring, reconciliation queue, and fleet telemetry platform for Egyptian mobile wallets and financial networks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
