@@ -684,7 +684,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-primary text-base">check_circle</span>
-                      <span>{language === 'ar' ? 'لوحة قيود لحظية Section 12A' : 'Section 12A real-time ledger'}</span>
+                      <span>{language === 'ar' ? 'لوحة قيود وتدقيق لحظي' : 'Real-time reconciliation ledger'}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-primary text-base">check_circle</span>
@@ -734,7 +734,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-primary text-base">check_circle</span>
-                      <span>{language === 'ar' ? 'لوحة قيود لحظية Section 12A' : 'Section 12A real-time ledger'}</span>
+                      <span>{language === 'ar' ? 'لوحة قيود وتدقيق لحظي' : 'Real-time reconciliation ledger'}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="material-symbols-outlined text-primary text-base">check_circle</span>

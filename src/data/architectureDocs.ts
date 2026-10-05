@@ -50,10 +50,10 @@ Every device request must be authenticated via HMAC-SHA256 signature using the d
 - Transport Idempotency: Repeated HTTP uploads with the same X-Nonce within the freshness window must return the cached response without creating duplicate raw events.
 - Financial Idempotency: Deduplicate on (organization_id, provider, external_trx_id).
 
-## Invariant 5: The Trust Boundary (Section 12A)
+## Invariant 5: The Trust Boundary & Anti-Spoofing
 Never treat matching balance arithmetic, sender labels, parser scores, or device signatures as proof of bank settlement. A spoofed SMS can contain mathematically perfect numbers.
 
-## Invariant 6: Immutability of Financial Sources (Section 4A)
+## Invariant 6: Immutability of Financial Sources
 A Payment Source entity is immutable. Switching the default receiving source creates a new binding with activation timestamps; it never overwrites or re-labels historical ledger entries.
 `
   },
@@ -61,9 +61,9 @@ A Payment Source entity is immutable. Switching the default receiving source cre
     id: 'payment_sources',
     title: 'Payment Sources & Financial Limits',
     filename: 'PAYMENT_SOURCES_AND_LIMITS.md',
-    category: 'Product Specifications (Section 4A)',
+    category: 'Product Specifications & Limits',
     summary: 'Architecture for multi-wallet operations, safe instruction switching, and statutory CBE regulatory limits.',
-    content: `# Payment Sources, Safe Switching, and Financial Limits (Section 4A)
+    content: `# Payment Sources, Safe Switching, and Financial Limits
 
 ## 1. Domain Entities & Structural Separation
 1. Balance Account: Canonical ledger container. Holds authoritative balance.
@@ -83,9 +83,9 @@ A Payment Source entity is immutable. Switching the default receiving source cre
     id: 'capture_adapters',
     title: 'Cross-Platform Capture Adapters',
     filename: 'CAPTURE_ADAPTERS.md',
-    category: 'Hardware & OS (Section 4B)',
+    category: 'Hardware & Mobile Adapters',
     summary: 'Capability matrix for Android, iOS Shortcuts prototype validation, and Huawei EMUI retention.',
-    content: `# Cross-Platform Capture Adapters & Capability Matrix (Section 4B)
+    content: `# Cross-Platform Capture Adapters & Capability Matrix
 
 ## 1. Executive Adapter Capability Matrix
 - Android MacroDroid Bridge: 100% Autonomous, High Trust (Verified Baseline).
@@ -105,9 +105,9 @@ Treated as an active validation candidate rather than ruled out. Must be tested 
     id: 'reconciliation',
     title: 'Reconciliation & Out-of-Order Engine',
     filename: 'RECONCILIATION.md',
-    category: 'Ledger Engine (Section 12A)',
+    category: 'Ledger Engine Architecture',
     summary: 'Mathematical models for balance reconciliation, USSD capabilities boundary, and fake-message defense.',
-    content: `# Out-of-Order Reconciliation & Fake-Message Defense (Section 12A)
+    content: `# Out-of-Order Reconciliation & Fake-Message Defense
 
 ## 1. The Ledger Equation & Checkpoint Anchor
 - balance_after = balance_before + signed_net_account_effect.

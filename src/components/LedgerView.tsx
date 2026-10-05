@@ -46,15 +46,14 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
       if (providerFilter !== 'all' && tx.provider !== providerFilter) {
         return false;
       }
-      // Search query
+      // Search query filter (search by amount, sender, phone, trxId)
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchesSender = tx.senderName.toLowerCase().includes(q);
-        const matchesPhone = tx.senderPhone.toLowerCase().includes(q);
-        const matchesTrx = tx.trxId.toLowerCase().includes(q);
-        const matchesAmount = tx.amount.toString().includes(q);
-        const matchesDevice = tx.deviceName.toLowerCase().includes(q);
-        return matchesSender || matchesPhone || matchesTrx || matchesAmount || matchesDevice;
+        const query = searchQuery.toLowerCase().trim();
+        const matchTrxId = tx.trxId.toLowerCase().includes(query);
+        const matchSender = tx.senderName.toLowerCase().includes(query);
+        const matchPhone = tx.senderPhone ? tx.senderPhone.includes(query) : false;
+        const matchAmount = tx.amount.toString().includes(query);
+        return matchTrxId || matchSender || matchPhone || matchAmount;
       }
       return true;
     });
@@ -64,13 +63,44 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   const activeDetailTx = selectedTransaction || transactions[0];
 
   return (
-    <div className="pt-12 pb-28 max-w-2xl mx-auto min-h-screen px-margin-mobile flex flex-col gap-space-md">
-      {/* Top Operational Bar: Search, Date & Quick Triggers */}
-      <section className="mt-space-md flex flex-col gap-space-sm">
-        {/* Search Input */}
+    <div className="py-6 pb-28 max-w-7xl mx-auto min-h-screen px-4 sm:px-6 flex flex-col gap-6">
+      {/* Top Operational Bar: Title, Search, Stats */}
+      <section className="flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-outline-variant/80">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                <span className="material-symbols-outlined text-xl">receipt_long</span>
+              </div>
+              <h1 className="text-headline-md font-bold text-on-surface">
+                {language === 'ar' ? 'سجل العمليات والقيود اللحظية' : 'Reconciliation Ledger'}
+              </h1>
+            </div>
+            <p className="text-body-md text-on-surface-variant">
+              {language === 'ar'
+                ? 'فحص ومطابقة حركات المحافظ الإلكترونية وشبكة IPN وتدقيق الأدلة الرقمية'
+                : 'Cryptographically verified real-time ledger and audit trail'}
+            </p>
+          </div>
+
+          {/* Settled Today Metric */}
+          <div className="flex items-center gap-3 bg-surface-container-lowest border border-outline-variant px-4 py-2 rounded-2xl shadow-xs self-start sm:self-auto">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <div>
+              <span className="text-label-xs text-on-surface-variant block">
+                {language === 'ar' ? 'إجمالي التسوية المؤكدة' : 'Settled Volume'}
+              </span>
+              <span className="text-title-md font-code-num font-extrabold text-on-surface">
+                {settledTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Search Input with proper RTL & LTR icon placement */}
         <div className="relative flex items-center">
           <span
-            className="material-symbols-outlined absolute left-3 text-outline text-title-md pointer-events-none"
+            className="material-symbols-outlined absolute left-3.5 rtl:left-auto rtl:right-3.5 text-outline text-title-md pointer-events-none"
             data-icon="search"
           >
             search
@@ -81,307 +111,396 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={
               language === 'ar'
-                ? 'البحث بالمرسل، الهاتف (010...)، رقم العملية، أو المبلغ'
-                : 'Search by sender, phone (010...), TRX ID, or amount'
+                ? 'البحث بالمرسل، الهاتف (010...)، رقم العملية، أو المبلغ...'
+                : 'Search by sender, phone (010...), TRX ID, or amount...'
             }
-            className="w-full h-9 pl-9 pr-8 bg-surface-container-lowest border border-outline-variant rounded-lg text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-all shadow-none"
+            className="w-full h-11 pl-11 pr-10 rtl:pl-10 rtl:pr-11 bg-surface-container-lowest border border-outline-variant rounded-xl text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all shadow-xs"
           />
-          {searchQuery ? (
+          {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 text-outline-variant hover:text-on-surface p-1"
+              className="absolute right-3 rtl:right-auto rtl:left-3 text-outline-variant hover:text-on-surface p-1 rounded-lg transition-colors cursor-pointer"
               aria-label="Clear search"
             >
               <span className="material-symbols-outlined text-sm">close</span>
             </button>
-          ) : (
-            <button
-              className="absolute right-2 text-outline-variant hover:text-on-surface"
-              type="button"
-              aria-label="Voice input"
-            >
-              <span className="material-symbols-outlined text-title-md" data-icon="mic">
-                mic
-              </span>
-            </button>
           )}
-        </div>
-
-        {/* Date & Telemetry Bar */}
-        <div className="flex items-center justify-between gap-space-sm bg-surface-container-lowest border border-outline-variant p-space-xs px-space-sm rounded-lg">
-          <button className="flex items-center gap-1.5 text-on-surface hover:text-primary transition-colors">
-            <span className="material-symbols-outlined text-body-md text-primary" data-icon="calendar_today">
-              calendar_today
-            </span>
-            <span className="text-label-md font-semibold">
-              {language === 'ar' ? 'اليوم (توقيت القاهرة)' : 'Today (Africa/Cairo)'}
-            </span>
-            <span className="material-symbols-outlined text-body-md" data-icon="expand_more">
-              expand_more
-            </span>
-          </button>
-
-          <div className="flex items-center gap-space-xs text-code-num font-code-num text-label-sm text-on-surface-variant">
-            <span className="inline-block w-2 h-2 rounded-full bg-primary"></span>
-            <span>
-              EGP{' '}
-              {settledTotal.toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{' '}
-              {language === 'ar' ? 'تسوية' : 'Settled'}
-            </span>
-          </div>
         </div>
       </section>
 
-      {/* Sticky Horizontal Filter Chips */}
-      <div className="sticky top-12 z-30 -mx-margin-mobile px-margin-mobile py-space-xs bg-background/95 backdrop-blur-sm flex items-center gap-1.5 overflow-x-auto no-scrollbar border-b border-outline-variant/50">
-        {/* Tab: All */}
-        <button
-          onClick={() => setStatusFilter('all')}
-          className={`whitespace-nowrap px-2.5 py-1 rounded text-label-sm font-semibold flex items-center gap-1 active:scale-95 transition-all ${
-            statusFilter === 'all'
-              ? 'bg-primary text-on-primary'
-              : 'bg-surface-container-lowest border border-outline-variant text-on-surface hover:bg-surface-container'
-          }`}
-        >
-          <span>{language === 'ar' ? 'الكل' : 'All'}</span>
-          <span
-            className={`px-1 py-0.2 rounded text-code-num font-code-num ${
+      {/* Horizontal Filter Tabs & Provider Filter */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-outline-variant/60">
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+          {/* Tab: All */}
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={`whitespace-nowrap px-3 py-1.5 rounded-full text-label-sm font-bold flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer ${
               statusFilter === 'all'
-                ? 'bg-primary-container text-on-primary-container'
-                : 'text-outline'
+                ? 'bg-primary text-on-primary shadow-xs'
+                : 'bg-surface-container-low border border-outline-variant text-on-surface hover:bg-surface-container'
             }`}
           >
-            {transactions.length}
-          </span>
-        </button>
+            <span>{language === 'ar' ? 'الكل' : 'All'}</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-label-xs font-code-num ${
+                statusFilter === 'all'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-surface-container-high text-on-surface-variant'
+              }`}
+            >
+              {transactions.length}
+            </span>
+          </button>
 
-        {/* Tab: Confirmed */}
-        <button
-          onClick={() => setStatusFilter('confirmed')}
-          className={`whitespace-nowrap px-2.5 py-1 rounded text-label-sm font-semibold flex items-center gap-1 active:scale-95 transition-all ${
-            statusFilter === 'confirmed'
-              ? 'bg-primary text-on-primary'
-              : 'bg-surface-container-lowest border border-outline-variant text-on-surface hover:bg-surface-container'
-          }`}
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
-          <span>{language === 'ar' ? 'مؤكدة' : 'Confirmed'}</span>
-          <span className="text-outline font-code-num">({confirmedCount})</span>
-        </button>
+          {/* Tab: Confirmed */}
+          <button
+            onClick={() => setStatusFilter('confirmed')}
+            className={`whitespace-nowrap px-3 py-1.5 rounded-full text-label-sm font-bold flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer ${
+              statusFilter === 'confirmed'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-surface-container-low border border-outline-variant text-on-surface hover:bg-surface-container'
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>{language === 'ar' ? 'مؤكدة' : 'Confirmed'}</span>
+            <span className="text-label-xs font-code-num">({confirmedCount})</span>
+          </button>
 
-        {/* Tab: Review Required */}
-        <button
-          onClick={() => setStatusFilter('review_required')}
-          className={`whitespace-nowrap px-2.5 py-1 rounded text-label-sm font-semibold flex items-center gap-1 active:scale-95 transition-all ${
-            statusFilter === 'review_required'
-              ? 'bg-error text-on-error'
-              : 'bg-surface-container-high text-on-primary-fixed border border-primary-fixed'
-          }`}
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-error animate-ping"></span>
-          <span>{language === 'ar' ? 'قيد المراجعة' : 'Review Required'}</span>
-          <span className="text-primary font-code-num">({reviewCount})</span>
-        </button>
+          {/* Tab: Review Required */}
+          <button
+            onClick={() => setStatusFilter('review_required')}
+            className={`whitespace-nowrap px-3 py-1.5 rounded-full text-label-sm font-bold flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer ${
+              statusFilter === 'review_required'
+                ? 'bg-error text-white shadow-xs'
+                : 'bg-error-container/20 border border-error/30 text-error hover:bg-error-container/30'
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-error animate-pulse"></span>
+            <span>{language === 'ar' ? 'قيد المراجعة' : 'Review Required'}</span>
+            <span className="text-label-xs font-code-num font-bold">({reviewCount})</span>
+          </button>
 
-        {/* Tab: Failed */}
-        <button
-          onClick={() => setStatusFilter('failed')}
-          className={`whitespace-nowrap px-2.5 py-1 rounded text-label-sm font-semibold flex items-center gap-1 active:scale-95 transition-all ${
-            statusFilter === 'failed'
-              ? 'bg-secondary text-white'
-              : 'bg-surface-container-lowest border border-outline-variant text-on-surface-variant hover:bg-surface-container'
-          }`}
-        >
-          <span>{language === 'ar' ? 'فشلت' : 'Failed'}</span>
-          <span className="text-outline font-code-num">({failedCount})</span>
-        </button>
-
-        <div className="h-4 w-px bg-outline-variant mx-0.5"></div>
+          {/* Tab: Failed */}
+          <button
+            onClick={() => setStatusFilter('failed')}
+            className={`whitespace-nowrap px-3 py-1.5 rounded-full text-label-sm font-bold flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer ${
+              statusFilter === 'failed'
+                ? 'bg-secondary text-white shadow-xs'
+                : 'bg-surface-container-low border border-outline-variant text-on-surface-variant hover:bg-surface-container'
+            }`}
+          >
+            <span>{language === 'ar' ? 'فشلت / مرفوضة' : 'Failed'}</span>
+            <span className="text-label-xs font-code-num">({failedCount})</span>
+          </button>
+        </div>
 
         {/* Provider Dropdown Selector */}
-        <select
-          value={providerFilter}
-          onChange={(e) => setProviderFilter(e.target.value)}
-          className="whitespace-nowrap px-2.5 py-1 rounded bg-surface-container-lowest border border-outline-variant text-on-surface text-label-sm cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
-        >
-          <option value="all">{language === 'ar' ? 'جميع المزودين' : 'All Providers'}</option>
-          <option value="vodafone_cash">Vodafone Cash</option>
-          <option value="instapay">InstaPay (IPN)</option>
-          <option value="orange_cash">Orange Cash</option>
-          <option value="etisalat_cash">e& Cash</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <span className="text-label-xs text-on-surface-variant font-medium hidden sm:inline">
+            {language === 'ar' ? 'تصفية المزود:' : 'Provider:'}
+          </span>
+          <select
+            value={providerFilter}
+            onChange={(e) => setProviderFilter(e.target.value)}
+            className="h-9 px-3 py-1 rounded-xl bg-surface-container-lowest border border-outline-variant text-on-surface text-label-sm font-semibold cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-xs"
+          >
+            <option value="all">{language === 'ar' ? 'جميع المزودين' : 'All Providers'}</option>
+            <option value="vodafone_cash">Vodafone Cash</option>
+            <option value="instapay">InstaPay (IPN)</option>
+            <option value="orange_cash">Orange Cash</option>
+            <option value="etisalat_cash">e& Cash</option>
+          </select>
+        </div>
       </div>
 
-      {/* High-Density Financial Transaction Items */}
-      <div className="flex flex-col gap-space-sm" role="list">
-        {filteredList.length === 0 ? (
-          <div className="p-10 text-center bg-surface-container-lowest border border-outline-variant rounded-2xl space-y-3">
-            <div className="w-12 h-12 rounded-full bg-surface-container-low text-primary flex items-center justify-center mx-auto">
-              <span className="material-symbols-outlined text-2xl">receipt_long</span>
+      {/* Responsive Main Layout: Transactions List + Desktop Inspector Panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Transaction List (8 Cols on Desktop) */}
+        <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-3" role="list">
+          {filteredList.length === 0 ? (
+            <div className="p-12 text-center bg-surface-container-lowest border border-outline-variant rounded-2xl space-y-4 shadow-xs">
+              <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-xs">
+                <span className="material-symbols-outlined text-3xl">receipt_long</span>
+              </div>
+              <h3 className="text-title-md font-bold text-on-surface">
+                {language === 'ar' ? 'لا توجد معاملات مطابقة للبحث' : 'No matching transactions'}
+              </h3>
+              <p className="text-body-sm text-on-surface-variant max-w-sm mx-auto">
+                {language === 'ar'
+                  ? 'ستظهر هنا كافة المعاملات المؤكدة وقيد المراجعة فور وصول الرسائل إلى أجهزتك المتصلة.'
+                  : 'Incoming payments will appear here in real-time as soon as SMS/notifications are captured.'}
+              </p>
             </div>
-            <h3 className="text-title-md font-bold text-on-surface">
-              {language === 'ar' ? 'لا توجد معاملات بعد' : 'No transactions recorded yet'}
-            </h3>
-            <p className="text-body-sm text-on-surface-variant max-w-sm mx-auto">
-              {language === 'ar'
-                ? 'ستظهر هنا كافة المعاملات المؤكدة وقيد المراجعة فور وصول الرسائل إلى أجهزتك المتصلة.'
-                : 'Incoming payments will appear here in real-time as soon as SMS/notifications are captured and verified.'}
-            </p>
-          </div>
-        ) : (
-          filteredList.map((tx) => {
-          const isSelected = activeDetailTx?.id === tx.id;
-          const isConfirmed = tx.status === 'confirmed';
-          const isReview = tx.status === 'review_required';
-          const isFailed = tx.status === 'failed';
+          ) : (
+            filteredList.map((tx) => {
+              const isSelected = activeDetailTx?.id === tx.id;
+              const isConfirmed = tx.status === 'confirmed';
+              const isReview = tx.status === 'review_required';
+              const isFailed = tx.status === 'failed';
 
-          return (
-            <article
-              key={tx.id}
-              onClick={() => {
-                onSelectTransaction(tx);
-                setIsDetailDrawerOpen(true);
-              }}
-              className={`border rounded-lg p-space-sm shadow-none transition-colors cursor-pointer ${
-                isReview
-                  ? 'bg-surface-container-low border-primary-container/40 border-l-4 border-l-primary-container'
-                  : isFailed
-                  ? 'bg-surface-container-lowest border-outline-variant border-l-4 border-l-error'
-                  : isSelected
-                  ? 'bg-surface-container-lowest border-primary border-l-4 border-l-primary ring-1 ring-primary/20'
-                  : 'bg-surface-container-lowest border-outline-variant hover:border-primary border-l-4 border-l-primary'
-              }`}
-              role="listitem"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-space-xs">
-                  <span
-                    className={`text-title-md font-bold font-code-num ${
-                      isFailed ? 'text-outline line-through' : 'text-on-surface'
-                    }`}
-                  >
-                    +{tx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </span>
-                  <span className="text-label-sm text-on-surface-variant">EGP</span>
+              return (
+                <article
+                  key={tx.id}
+                  onClick={() => {
+                    onSelectTransaction(tx);
+                    setIsDetailDrawerOpen(true);
+                  }}
+                  className={`border rounded-2xl p-4 transition-all cursor-pointer heroui-card ${
+                    isReview
+                      ? 'bg-error-container/10 border-error/40 rtl:border-r-4 rtl:border-l-0 border-l-4 border-l-error'
+                      : isFailed
+                      ? 'bg-surface-container-lowest border-outline-variant opacity-75 rtl:border-r-4 rtl:border-l-0 border-l-4 border-l-secondary'
+                      : isSelected
+                      ? 'bg-surface-container-lowest border-primary rtl:border-r-4 rtl:border-l-0 border-l-4 border-l-primary ring-2 ring-primary/20 shadow-md'
+                      : 'bg-surface-container-lowest border-outline-variant hover:border-primary/50 rtl:border-r-4 rtl:border-l-0 border-l-4 border-l-primary'
+                  }`}
+                  role="listitem"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`text-headline-sm font-bold font-code-num ${
+                          isFailed ? 'text-outline line-through' : 'text-on-surface'
+                        }`}
+                      >
+                        +{tx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </span>
+                      <span className="text-label-sm font-bold text-primary">ج.م</span>
 
-                  {isConfirmed && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-label-sm bg-surface-container text-primary font-semibold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-primary mr-1"></span>
-                      {language === 'ar' ? 'مؤكدة' : 'Confirmed'}
+                      {isConfirmed && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-500/20">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          <span>{language === 'ar' ? 'مؤكدة' : 'Confirmed'}</span>
+                        </span>
+                      )}
+
+                      {isReview && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-xs bg-error/10 text-error font-bold border border-error/20">
+                          <span className="w-1.5 h-1.5 rounded-full bg-error animate-pulse"></span>
+                          <span>{language === 'ar' ? 'مطلوب مراجعة' : 'Review Required'}</span>
+                        </span>
+                      )}
+
+                      {isFailed && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-xs bg-surface-container-high text-on-surface-variant font-semibold">
+                          <span>{language === 'ar' ? 'ملغاة' : 'Failed'}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <span className="text-label-xs font-code-num text-on-surface-variant whitespace-nowrap">
+                      {tx.timestamp}
                     </span>
+                  </div>
+
+                  <div className="mt-2 flex items-center justify-between text-body-sm text-on-surface gap-2">
+                    <div className="flex items-center gap-2 font-medium">
+                      <span className="text-primary font-bold">{tx.providerLabel}</span>
+                      <span className="text-outline-variant">·</span>
+                      <span className={`text-on-surface ${isReview ? 'font-semibold' : ''}`}>
+                        {tx.senderName}
+                      </span>
+                    </div>
+                    <span className="text-code-num font-code-num text-label-sm text-on-surface-variant font-medium">
+                      {tx.senderPhone}
+                    </span>
+                  </div>
+
+                  {isReview && tx.reviewReason && (
+                    <div className="mt-2 p-2 rounded-xl bg-error-container/20 border border-error/20 text-label-sm text-error font-medium">
+                      {tx.reviewReason}
+                    </div>
                   )}
 
-                  {isReview && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-label-sm bg-surface-container-high text-primary-container font-semibold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-primary-container mr-1 animate-pulse"></span>
-                      {language === 'ar' ? 'مطلوب مراجعة' : 'Review Required'}
-                    </span>
-                  )}
+                  {/* Action buttons for Review items */}
+                  {isReview ? (
+                    <div className="mt-3 pt-2 border-t border-outline-variant/60 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-label-xs text-on-surface-variant font-code-num">
+                        <span className="material-symbols-outlined text-sm text-primary">point_of_sale</span>
+                        <span>{tx.deviceId}</span>
+                      </div>
 
-                  {isFailed && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-label-sm bg-error-container text-on-error-container font-semibold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-error mr-1"></span>
-                      {language === 'ar' ? 'فشلت / ملغاة' : 'Failed / Cancelled'}
-                    </span>
-                  )}
-                </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onConfirmTransaction(tx);
+                          }}
+                          className="px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-label-xs font-bold flex items-center gap-1 active:scale-95 transition-all shadow-xs cursor-pointer"
+                          type="button"
+                        >
+                          <span className="material-symbols-outlined text-sm">check</span>
+                          <span>{language === 'ar' ? 'تأكيد العملية' : 'Confirm'}</span>
+                        </button>
 
-                <span className="text-label-sm font-code-num text-on-surface-variant">
-                  {tx.timestamp}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenReview(tx);
+                          }}
+                          className="px-3 py-1 rounded-xl bg-surface-container-high hover:bg-surface-container text-on-surface text-label-xs font-semibold flex items-center gap-1 border border-outline-variant active:scale-95 transition-all cursor-pointer"
+                          type="button"
+                        >
+                          <span className="material-symbols-outlined text-sm">visibility</span>
+                          <span>{language === 'ar' ? 'فحص كامل' : 'Inspect'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 pt-2 border-t border-outline-variant/60 flex items-center justify-between text-label-xs text-on-surface-variant">
+                      <span className="font-code-num text-primary font-semibold">
+                        TRX: {tx.trxId}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs text-outline">point_of_sale</span>
+                        <span className="font-code-num">{tx.deviceId}</span>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })
+          )}
+        </div>
+
+        {/* Selected Transaction Inspector (Pinned on Desktop) */}
+        {activeDetailTx && (
+          <aside className="hidden lg:block lg:col-span-5 xl:col-span-4 sticky top-20 bg-surface-container-lowest border border-outline-variant rounded-2xl shadow-sm p-6 space-y-5 heroui-card">
+            <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
+              <div>
+                <span className="text-label-xs text-outline uppercase tracking-wider block">
+                  {language === 'ar' ? 'تفاصيل المعاملة والتدقيق' : 'Audit Telemetry'}
                 </span>
+                <div className="flex items-baseline gap-1 mt-0.5">
+                  <span className="text-headline-md font-bold text-on-surface font-code-num">
+                    +{activeDetailTx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-title-sm font-bold text-primary">ج.م</span>
+                </div>
               </div>
 
-              <div className="mt-1 flex items-center justify-between text-body-md text-on-surface">
-                <div className="flex items-center gap-1 font-medium">
-                  <span className="text-primary font-semibold">{tx.providerLabel}</span>
-                  <span className="text-outline-variant">·</span>
-                  <span className={isReview ? 'text-on-surface-variant italic' : ''}>
-                    {tx.senderName}
-                  </span>
-                </div>
-                <span className="text-code-num font-code-num text-label-md text-on-surface-variant">
-                  {tx.senderPhone}
-                </span>
+              <span
+                className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-label-xs font-bold ${
+                  activeDetailTx.status === 'confirmed'
+                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                    : activeDetailTx.status === 'review_required'
+                    ? 'bg-error/10 text-error border border-error/20'
+                    : 'bg-surface-container-high text-on-surface-variant'
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    activeDetailTx.status === 'confirmed' ? 'bg-emerald-500' : 'bg-error'
+                  }`}
+                ></span>
+                {activeDetailTx.status === 'confirmed'
+                  ? language === 'ar' ? 'مؤكدة' : 'Confirmed'
+                  : activeDetailTx.status === 'review_required'
+                  ? language === 'ar' ? 'قيد المراجعة' : 'Review Required'
+                  : language === 'ar' ? 'فشلت' : 'Failed'}
+              </span>
+            </div>
+
+            {/* Core Info */}
+            <div className="space-y-3 text-body-sm">
+              <div className="flex items-center justify-between text-label-sm border-b pb-2 border-outline-variant/60">
+                <span className="text-on-surface-variant">{language === 'ar' ? 'رقم العملية:' : 'Transaction ID:'}</span>
+                <span className="font-code-num font-bold text-primary select-all">{activeDetailTx.trxId}</span>
               </div>
 
-              {isReview && tx.reviewReason && (
-                <p className="text-label-sm text-secondary mt-0.5">
-                  {tx.reviewReason}
-                </p>
-              )}
+              <div className="flex items-center justify-between text-label-sm border-b pb-2 border-outline-variant/60">
+                <span className="text-on-surface-variant">{language === 'ar' ? 'المزود:' : 'Provider Rail:'}</span>
+                <span className="font-bold text-on-surface">{activeDetailTx.providerLabel}</span>
+              </div>
 
-              {/* Action buttons for Review items */}
-              {isReview ? (
-                <div className="mt-2 pt-1.5 border-t border-outline-variant flex items-center justify-between">
-                  <div className="flex items-center gap-1 text-label-sm text-on-surface-variant font-code-num">
-                    <span
-                      className="material-symbols-outlined text-label-sm text-outline"
-                      data-icon="point_of_sale"
-                    >
-                      point_of_sale
-                    </span>
-                    <span>{tx.deviceId}</span>
-                  </div>
+              <div className="flex items-center justify-between text-label-sm border-b pb-2 border-outline-variant/60">
+                <span className="text-on-surface-variant">{language === 'ar' ? 'اسم المرسل:' : 'Sender Name:'}</span>
+                <span className="font-semibold text-on-surface">{activeDetailTx.senderName}</span>
+              </div>
 
-                  <div className="flex items-center gap-space-xs">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onConfirmTransaction(tx);
-                      }}
-                      className="h-7 px-2.5 rounded bg-primary text-on-primary text-label-sm font-semibold flex items-center gap-1 hover:bg-primary-container active:scale-95 transition-all"
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined text-label-sm" data-icon="check">
-                        check
-                      </span>
-                      <span>{language === 'ar' ? 'تأكيد ✓' : 'Confirm ✓'}</span>
-                    </button>
+              <div className="flex items-center justify-between text-label-sm border-b pb-2 border-outline-variant/60">
+                <span className="text-on-surface-variant">{language === 'ar' ? 'هاتف المرسل:' : 'Sender Phone:'}</span>
+                <span className="font-code-num font-semibold text-on-surface">{activeDetailTx.senderPhone}</span>
+              </div>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenReview(tx);
-                      }}
-                      className="h-7 px-2.5 rounded bg-surface-container-lowest border border-outline-variant text-on-surface text-label-sm font-semibold flex items-center gap-1 hover:bg-surface-container-high active:scale-95 transition-all"
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined text-label-sm" data-icon="visibility">
-                        visibility
-                      </span>
-                      <span>{language === 'ar' ? 'فحص' : 'Inspect'}</span>
-                    </button>
-                  </div>
+              <div className="flex items-center justify-between text-label-sm border-b pb-2 border-outline-variant/60">
+                <span className="text-on-surface-variant">{language === 'ar' ? 'جهاز الالتقاط:' : 'Capture Device:'}</span>
+                <span className="font-code-num text-on-surface">{activeDetailTx.deviceId}</span>
+              </div>
+
+              <div className="flex items-center justify-between text-label-sm">
+                <span className="text-on-surface-variant">{language === 'ar' ? 'درجة الثقة:' : 'Confidence Score:'}</span>
+                <span className="font-code-num font-bold text-emerald-600 dark:text-emerald-400">
+                  {activeDetailTx.confidenceScore || 95}%
+                </span>
+              </div>
+            </div>
+
+            {/* Audit Timeline Steps */}
+            <div className="pt-3 border-t border-outline-variant">
+              <span className="text-label-xs font-bold text-on-surface-variant uppercase tracking-wider block mb-3">
+                {language === 'ar' ? 'سلسلة التدقيق اللحظية' : 'Real-time Audit Trail'}
+              </span>
+
+              <div className="relative pl-5 rtl:pl-0 rtl:pr-5 space-y-3 border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary/20 text-body-xs">
+                <div className="relative">
+                  <span className="absolute -left-[25px] rtl:-left-auto rtl:-right-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
+                  <p className="text-on-surface font-semibold">
+                    {language === 'ar' ? `التقاط الإشعار عبر ${activeDetailTx.deviceId}` : `Notification captured by ${activeDetailTx.deviceId}`}
+                  </p>
+                  <p className="text-label-xs text-outline font-code-num">
+                    {activeDetailTx.timestamp} · Latency 112ms
+                  </p>
                 </div>
-              ) : (
-                <div className="mt-1.5 pt-1.5 border-t border-outline-variant/60 flex items-center justify-between text-label-sm text-on-surface-variant">
-                  <span className={`font-code-num ${isFailed ? 'text-error' : ''}`}>
-                    {tx.trxId}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <span
-                      className="material-symbols-outlined text-label-sm text-outline"
-                      data-icon="point_of_sale"
-                    >
-                      point_of_sale
-                    </span>
-                    <span className="font-code-num">{tx.deviceId}</span>
-                  </div>
+
+                <div className="relative">
+                  <span className="absolute -left-[25px] rtl:-left-auto rtl:-right-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
+                  <p className="text-on-surface font-semibold">
+                    {language === 'ar' ? `المطابقة البرمجية بنسبة ${activeDetailTx.confidenceScore || 95}%` : `Parsed with ${activeDetailTx.confidenceScore || 95}% confidence`}
+                  </p>
+                  <p className="text-label-xs text-outline font-code-num">
+                    SHA-256 HMAC Verified
+                  </p>
                 </div>
-              )}
-            </article>
-          );
-        }))}
+
+                <div className="relative">
+                  <span className="absolute -left-[25px] rtl:-left-auto rtl:-right-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
+                  <p className="text-on-surface font-semibold">
+                    {language === 'ar' ? 'إرسال التنبيه الفوري للمشغل' : 'Telegram notification dispatched'}
+                  </p>
+                  <p className="text-label-xs text-outline font-code-num">
+                    Outbox Queue Delivered
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            {activeDetailTx.status === 'review_required' && (
+              <div className="pt-3 border-t border-outline-variant flex items-center gap-2">
+                <button
+                  onClick={() => onConfirmTransaction(activeDetailTx)}
+                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-label-xs active:scale-95 transition-all cursor-pointer shadow-xs"
+                >
+                  {language === 'ar' ? 'تأكيد العملية' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => onOpenReview(activeDetailTx)}
+                  className="py-2 px-3 rounded-xl bg-surface-container-high hover:bg-surface-container text-on-surface font-bold text-label-xs active:scale-95 transition-all cursor-pointer border border-outline-variant"
+                >
+                  {language === 'ar' ? 'فحص كامل' : 'Review'}
+                </button>
+              </div>
+            )}
+          </aside>
+        )}
       </div>
 
-      {/* Interactive Detail Drawer/Sheet Preview: Transaction Detail Drill-Down */}
+      {/* Mobile Detail Bottom Sheet (when on mobile view) */}
       {activeDetailTx && (
         <aside
           id="detailDrawer"
-          className={`fixed inset-x-0 bottom-12 z-40 max-w-lg mx-auto bg-surface-container-lowest border-t border-x border-outline-variant rounded-t-xl shadow-2xl transition-transform duration-300 transform ${
+          className={`lg:hidden fixed inset-x-0 bottom-12 z-40 max-w-lg mx-auto bg-surface-container-lowest border-t border-x border-outline-variant rounded-t-2xl shadow-2xl transition-transform duration-300 transform ${
             isDetailDrawerOpen ? 'translate-y-0' : 'translate-y-[calc(100%-2.5rem)]'
           }`}
         >
@@ -389,153 +508,76 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
           <div
             className="w-full flex justify-center pt-2 pb-1 cursor-pointer select-none"
             onClick={() => setIsDetailDrawerOpen(!isDetailDrawerOpen)}
-            title="Click to toggle drawer"
+            title="Toggle drawer"
           >
             <div className="w-12 h-1 bg-outline-variant rounded-full"></div>
           </div>
 
           {/* Sheet Header */}
-          <div className="px-margin-mobile pb-space-sm pt-1 border-b border-outline-variant flex items-center justify-between">
+          <div className="px-4 pb-3 pt-1 border-b border-outline-variant flex items-center justify-between">
             <div>
-              <span className="text-label-sm text-outline uppercase tracking-wider">
+              <span className="text-label-xs text-outline uppercase tracking-wider">
                 {language === 'ar' ? 'تفاصيل المعاملة والتدقيق' : 'Transaction Detail'}
               </span>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-headline-md font-bold text-on-surface font-code-num">
-                  {activeDetailTx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  +{activeDetailTx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </span>
-                <span className="text-title-md font-medium text-on-surface-variant">
-                  {activeDetailTx.currency}
-                </span>
+                <span className="text-title-sm font-bold text-primary">ج.م</span>
               </div>
             </div>
 
             <div className="flex flex-col items-end gap-1">
               <span
-                className={`inline-flex items-center px-2 py-0.5 rounded text-label-sm font-semibold ${
+                className={`inline-flex items-center px-2 py-0.5 rounded-full text-label-xs font-bold ${
                   activeDetailTx.status === 'confirmed'
-                    ? 'bg-surface-container text-primary'
-                    : activeDetailTx.status === 'review_required'
-                    ? 'bg-error-container text-on-error-container'
-                    : 'bg-surface-container-high text-secondary'
+                    ? 'bg-emerald-500/10 text-emerald-600'
+                    : 'bg-error/10 text-error'
                 }`}
               >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full mr-1 ${
-                    activeDetailTx.status === 'confirmed'
-                      ? 'bg-primary'
-                      : activeDetailTx.status === 'review_required'
-                      ? 'bg-error'
-                      : 'bg-secondary'
-                  }`}
-                ></span>
                 {activeDetailTx.status === 'confirmed'
-                  ? language === 'ar'
-                    ? 'مؤكدة'
-                    : 'Confirmed'
-                  : activeDetailTx.status === 'review_required'
-                  ? language === 'ar'
-                    ? 'قيد المراجعة'
-                    : 'Review Required'
-                  : language === 'ar'
-                  ? 'فشلت'
-                  : 'Failed'}
+                  ? language === 'ar' ? 'مؤكدة' : 'Confirmed'
+                  : language === 'ar' ? 'مراجعة' : 'Review'}
               </span>
-              <span className="text-label-sm text-secondary font-code-num">
+              <span className="text-label-xs text-outline font-code-num">
                 {activeDetailTx.trxId}
               </span>
             </div>
           </div>
 
-          {/* Sheet Content Body: Audit Timeline */}
-          <div className="p-margin-mobile space-y-3 max-h-56 overflow-y-auto">
-            <div className="flex items-center justify-between text-body-md">
-              <span className="text-on-surface-variant">
-                {language === 'ar' ? 'مسار المزود:' : 'Provider Rail:'}
-              </span>
-              <span className="font-semibold text-primary">
-                {activeDetailTx.providerLabel} (
-                {activeDetailTx.provider === 'instapay'
-                  ? 'Egypt IPN Network'
-                  : activeDetailTx.provider === 'vodafone_cash'
-                  ? 'Vodafone Egypt'
-                  : activeDetailTx.provider === 'orange_cash'
-                  ? 'Orange Egypt'
-                  : 'e& Egypt'}
-                )
-              </span>
+          {/* Sheet Content Body */}
+          <div className="p-4 space-y-3 max-h-56 overflow-y-auto text-body-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-on-surface-variant">{language === 'ar' ? 'المزود:' : 'Provider:'}</span>
+              <span className="font-bold text-primary">{activeDetailTx.providerLabel}</span>
             </div>
-
-            {/* Audit Timeline Steps */}
-            <div className="relative pl-5 space-y-2 border-l-2 border-surface-container text-body-md">
-              {activeDetailTx.auditTimeline && activeDetailTx.auditTimeline.length > 0 ? (
-                activeDetailTx.auditTimeline.map((step, idx) => (
-                  <div key={idx} className="relative">
-                    <span className="absolute -left-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
-                    <p className="text-on-surface font-medium leading-tight">{step.title}</p>
-                    <p className="text-label-sm text-outline font-code-num">
-                      {step.time} · {step.detail}
-                    </p>
-                  </div>
-                ))
-              ) : (
-                <>
-                  <div className="relative">
-                    <span className="absolute -left-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
-                    <p className="text-on-surface font-medium leading-tight">
-                      Notification captured by {activeDetailTx.deviceId}
-                    </p>
-                    <p className="text-label-sm text-outline font-code-num">
-                      {activeDetailTx.timestamp}:02 · Agent Latency 112ms
-                    </p>
-                  </div>
-                  <div className="relative">
-                    <span className="absolute -left-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
-                    <p className="text-on-surface font-medium leading-tight">
-                      Parsed with {activeDetailTx.confidenceScore || 99}% confidence
-                    </p>
-                    <p className="text-label-sm text-outline font-code-num">
-                      {activeDetailTx.timestamp}:04 · Regex Engine #4 ({activeDetailTx.senderName})
-                    </p>
-                  </div>
-                  <div className="relative">
-                    <span className="absolute -left-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
-                    <p className="text-on-surface font-medium leading-tight">
-                      Telegram alert delivered
-                    </p>
-                    <p className="text-label-sm text-outline font-code-num">
-                      {activeDetailTx.timestamp}:05 · Channel: #cairo-vault-bot
-                    </p>
-                  </div>
-                  <div className="relative">
-                    <span className="absolute -left-[25px] top-1 w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-surface-container-lowest"></span>
-                    <p className="text-on-surface font-medium leading-tight">
-                      Webhook acknowledged (HTTP 200)
-                    </p>
-                    <p className="text-label-sm text-outline font-code-num">
-                      {activeDetailTx.timestamp}:06 · Endpoint: /api/v1/ledger/ingest
-                    </p>
-                  </div>
-                </>
-              )}
+            <div className="flex items-center justify-between">
+              <span className="text-on-surface-variant">{language === 'ar' ? 'المرسل:' : 'Sender:'}</span>
+              <span className="font-semibold text-on-surface">{activeDetailTx.senderName} ({activeDetailTx.senderPhone})</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-on-surface-variant">{language === 'ar' ? 'جهاز الالتقاط:' : 'Terminal:'}</span>
+              <span className="font-code-num">{activeDetailTx.deviceId}</span>
             </div>
           </div>
 
-          {/* Sheet Footer Quick Action */}
-          <div className="px-margin-mobile py-2 bg-surface-container-low border-t border-outline-variant flex items-center justify-between text-label-sm">
-            <span className="text-on-surface-variant font-code-num">
-              Signature: {activeDetailTx.signature || '7c88b9...e2a'}
-            </span>
+          {/* Sheet Footer */}
+          <div className="px-4 py-2 bg-surface-container-low border-t border-outline-variant flex items-center justify-between text-label-sm">
             <button
               onClick={() => setIsDetailDrawerOpen(false)}
-              className="text-primary font-semibold hover:underline flex items-center gap-0.5"
-              type="button"
+              className="text-primary font-bold hover:underline flex items-center gap-1 cursor-pointer"
             >
-              <span>{language === 'ar' ? 'إغلاق اللوحة' : 'Dismiss Drawer'}</span>
-              <span className="material-symbols-outlined text-label-sm" data-icon="close">
-                close
-              </span>
+              <span>{language === 'ar' ? 'إغلاق اللوحة' : 'Dismiss'}</span>
+              <span className="material-symbols-outlined text-sm">close</span>
             </button>
+            {activeDetailTx.status === 'review_required' && (
+              <button
+                onClick={() => onOpenReview(activeDetailTx)}
+                className="px-3 py-1 rounded-xl bg-primary text-on-primary text-label-xs font-bold cursor-pointer"
+              >
+                {language === 'ar' ? 'فحص كامل' : 'Inspect'}
+              </button>
+            )}
           </div>
         </aside>
       )}

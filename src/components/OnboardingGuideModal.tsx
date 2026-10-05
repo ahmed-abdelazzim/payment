@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Workspace, ProviderRail, Device } from '../types';
 
 interface OnboardingGuideModalProps {
@@ -29,6 +29,16 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
   language,
 }) => {
   const [activeStep, setActiveStep] = useState<number>(1);
+
+  // ESC key to close
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 

@@ -743,6 +743,7 @@ export default function App() {
         <DevicesView
           devices={devices}
           onToggleDeviceStatus={handleToggleDeviceStatus}
+          onOpenPairDevice={() => setIsPairingOpen(true)}
           language={language}
         />
       )}
@@ -814,7 +815,7 @@ export default function App() {
         language={language}
       />
 
-      {/* Operator Review & Verification Modal (Section 12A) */}
+      {/* Operator Review & Verification Modal */}
       {reviewingTransaction && (
         <ReviewModal
           transaction={reviewingTransaction}
@@ -875,11 +876,13 @@ export default function App() {
 
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-inverse-surface text-inverse-on-surface rounded-lg shadow-xl text-label-md flex items-center gap-2 border border-outline/30 animate-in fade-in slide-in-from-bottom-2">
-          <span className="material-symbols-outlined text-sm text-primary-fixed">
-            notifications_active
-          </span>
-          <span>{toastMessage}</span>
+        <div className="fixed bottom-20 sm:bottom-8 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-surface-container-lowest/95 dark:bg-surface-container-high/95 backdrop-blur-md text-on-surface rounded-2xl shadow-xl text-label-md flex items-center gap-2.5 border border-outline-variant shadow-primary/5 animate-slide-down-fade max-w-[90vw]">
+          <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-sm">
+              notifications_active
+            </span>
+          </div>
+          <span className="font-semibold text-body-sm">{toastMessage}</span>
         </div>
       )}
     </div>

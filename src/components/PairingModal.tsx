@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Device, ProviderRail } from '../types';
 import { apiFetch } from '../api';
 
@@ -32,6 +32,16 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     expiresAt: string;
   } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // ESC key to close
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 

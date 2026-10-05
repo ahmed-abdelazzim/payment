@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Workspace, User } from '../types';
 
 interface NavigationDrawerProps {
@@ -34,12 +34,21 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   theme,
   onToggleTheme,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   return (
     <>
       {/* Backdrop */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/40 z-40 transition-opacity"
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 transition-opacity"
           onClick={onClose}
         />
       )}

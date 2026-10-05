@@ -197,8 +197,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     switch (key) {
       case 'realtime_reconciliation':
         return {
-          ar: 'مطابقة العمليات اللحظية وخوارزمية الفحص الفلكي (Section 12A)',
-          en: 'Real-time transaction parsing & Section 12A reconciliation ledger',
+          ar: 'مطابقة العمليات اللحظية ومكافحة الرسائل الاحتيالية',
+          en: 'Real-time transaction reconciliation & anti-fraud verification ledger',
           icon: 'sync_alt',
         };
       case 'macrodroid_agent':

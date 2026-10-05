@@ -9,9 +9,9 @@ coverage/
 data/*
 !data/README.md
 
-
 # Never commit databases or migration backups
 *.db
 *.db-wal
 *.db-shm
 *.bak
+.agent/
