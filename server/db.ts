@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 
 let dbInstance: DatabaseSync | null = null;
 
@@ -13,7 +14,14 @@ export function getDatabase(dbPath?: string): DatabaseSync {
     return dbInstance;
   }
 
+  if (process.env.NODE_ENV === 'production' && !dbPath && !process.env.DATABASE_FILE?.trim()) {
+    throw new Error('PRODUCTION_DATABASE_FILE_REQUIRED');
+  }
+
   const finalPath = dbPath || process.env.DATABASE_FILE || path.join(process.cwd(), 'data', 'sarraf_ops.db');
+  if (process.env.NODE_ENV === 'production' && finalPath === ':memory:') {
+    throw new Error('PRODUCTION_MEMORY_DATABASE_FORBIDDEN');
+  }
   
   if (finalPath !== ':memory:') {
     const dir = path.dirname(finalPath);
@@ -139,7 +147,7 @@ export function initSchema(db: DatabaseSync): void {
       organization_id TEXT NOT NULL,
       account_name TEXT NOT NULL,
       currency TEXT DEFAULT 'EGP',
-      current_balance REAL NOT NULL DEFAULT 0.0,
+      current_balance_minor INTEGER NOT NULL DEFAULT 0,
       last_checkpoint_at TEXT,
       version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -156,8 +164,8 @@ export function initSchema(db: DatabaseSync): void {
       provider TEXT NOT NULL CHECK (provider IN ('vodafone_cash', 'instapay', 'orange_cash', 'etisalat_cash')),
       friendly_name TEXT NOT NULL,
       wallet_number TEXT NOT NULL,
-      daily_turnover_limit REAL NOT NULL,
-      monthly_turnover_limit REAL NOT NULL,
+      daily_turnover_limit_minor INTEGER NOT NULL CHECK (daily_turnover_limit_minor > 0),
+      monthly_turnover_limit_minor INTEGER NOT NULL CHECK (monthly_turnover_limit_minor > 0),
       is_paused_for_new_instructions INTEGER DEFAULT 0,
       retired_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -183,6 +191,7 @@ export function initSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS devices (
       id TEXT PRIMARY KEY,
       organization_id TEXT NOT NULL,
+      payment_source_id TEXT,
       device_number TEXT NOT NULL,
       friendly_name TEXT NOT NULL,
       location TEXT,
@@ -197,7 +206,8 @@ export function initSchema(db: DatabaseSync): void {
       battery_optimization_exempt INTEGER DEFAULT 0,
       last_telemetry_payload TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (payment_source_id) REFERENCES payment_sources(id) ON DELETE SET NULL
     );
 
     -- Device Credentials & Cryptographic Secrets
@@ -247,9 +257,9 @@ export function initSchema(db: DatabaseSync): void {
       raw_event_id TEXT,
       external_trx_id TEXT NOT NULL,
       provider TEXT NOT NULL,
-      amount REAL NOT NULL,
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
       currency TEXT DEFAULT 'EGP',
-      stated_balance_after REAL,
+      stated_balance_after_minor INTEGER,
       sender_name TEXT,
       sender_phone TEXT,
       status TEXT NOT NULL CHECK (status IN ('confirmed', 'review_required', 'pending_ordering', 'failed')),
@@ -272,7 +282,7 @@ export function initSchema(db: DatabaseSync): void {
       id TEXT PRIMARY KEY,
       balance_account_id TEXT NOT NULL,
       checkpoint_type TEXT NOT NULL CHECK (checkpoint_type IN ('OFFICIAL_STATEMENT', 'OPERATOR_PROVISIONAL', 'INFERRED_FIRST_SNAPSHOT')),
-      balance_amount REAL NOT NULL,
+      balance_amount_minor INTEGER NOT NULL,
       as_of_timestamp TEXT NOT NULL,
       actor_id TEXT,
       audit_notes TEXT,
@@ -286,8 +296,8 @@ export function initSchema(db: DatabaseSync): void {
       payment_source_id TEXT NOT NULL,
       period_type TEXT NOT NULL CHECK (period_type IN ('daily', 'monthly')),
       period_key TEXT NOT NULL, -- e.g. '2026-09-30'
-      accumulated_intake REAL NOT NULL DEFAULT 0.0,
-      regulatory_cap REAL NOT NULL,
+      accumulated_intake_minor INTEGER NOT NULL DEFAULT 0,
+      regulatory_cap_minor INTEGER NOT NULL,
       is_alert_80_dispatched INTEGER DEFAULT 0,
       is_alert_90_dispatched INTEGER DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -355,7 +365,7 @@ export function initSchema(db: DatabaseSync): void {
       name_en TEXT NOT NULL,
       name_ar TEXT NOT NULL,
       billing_cycle TEXT NOT NULL CHECK (billing_cycle IN ('monthly', 'annual')),
-      price_egp REAL NOT NULL,
+      price_minor INTEGER NOT NULL CHECK (price_minor >= 0),
       device_limit INTEGER NOT NULL,
       features_json TEXT NOT NULL,
       is_active INTEGER DEFAULT 1,
@@ -388,7 +398,7 @@ export function initSchema(db: DatabaseSync): void {
       plan_name_en TEXT NOT NULL,
       plan_name_ar TEXT NOT NULL,
       billing_cycle TEXT NOT NULL,
-      price_egp REAL NOT NULL,
+      price_minor INTEGER NOT NULL CHECK (price_minor >= 0),
       currency TEXT DEFAULT 'EGP',
       device_limit INTEGER NOT NULL,
       features_json TEXT NOT NULL,
@@ -447,7 +457,7 @@ export function initSchema(db: DatabaseSync): void {
       order_id TEXT UNIQUE NOT NULL,
       organization_id TEXT NOT NULL,
       plan_id TEXT NOT NULL,
-      amount_paid REAL NOT NULL,
+      amount_paid_minor INTEGER NOT NULL,
       currency TEXT DEFAULT 'EGP',
       payment_method TEXT DEFAULT 'instapay_manual',
       matched_external_trx_id TEXT,
@@ -460,7 +470,9 @@ export function initSchema(db: DatabaseSync): void {
     );
   `);
 
-  // Apply incremental column migrations safely
+  // Versioned migrations. Must run before any code below reads or writes
+  // money columns by their new names.
+  migrateMoneyToMinorUnits(db);
   try {
     db.prepare('ALTER TABLE users ADD COLUMN is_platform_admin INTEGER DEFAULT 0').run();
   } catch {}
@@ -479,6 +491,97 @@ export function initSchema(db: DatabaseSync): void {
   try {
     db.prepare('ALTER TABLE devices ADD COLUMN last_telemetry_payload TEXT').run();
   } catch {}
+  try {
+    db.prepare('ALTER TABLE devices ADD COLUMN payment_source_id TEXT').run();
+  } catch {}
+  try {
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_payment_source ON devices(payment_source_id)').run();
+  } catch {}
+
+  // SQLite does not support cross-table CHECK constraints. These triggers make
+  // tenant/source relationships enforceable even when an internal script or a
+  // future endpoint bypasses the normal service layer.
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_payment_source_account_same_org_insert
+    BEFORE INSERT ON payment_sources
+    FOR EACH ROW WHEN NOT EXISTS (
+      SELECT 1 FROM balance_accounts
+      WHERE id = NEW.balance_account_id AND organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'payment source balance account must belong to its organization');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_payment_source_account_same_org_update
+    BEFORE UPDATE OF organization_id, balance_account_id ON payment_sources
+    FOR EACH ROW WHEN NOT EXISTS (
+      SELECT 1 FROM balance_accounts
+      WHERE id = NEW.balance_account_id AND organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'payment source balance account must belong to its organization');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_device_source_same_org_insert
+    BEFORE INSERT ON devices
+    FOR EACH ROW WHEN NEW.payment_source_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM payment_sources
+      WHERE id = NEW.payment_source_id AND organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'device payment source must belong to its organization');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_device_source_same_org_update
+    BEFORE UPDATE OF organization_id, payment_source_id ON devices
+    FOR EACH ROW WHEN NEW.payment_source_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM payment_sources
+      WHERE id = NEW.payment_source_id AND organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'device payment source must belong to its organization');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_raw_event_device_same_org_insert
+    BEFORE INSERT ON raw_events
+    FOR EACH ROW WHEN NEW.device_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM devices
+      WHERE id = NEW.device_id AND organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'raw event device must belong to its organization');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_transaction_source_account_same_org_insert
+    BEFORE INSERT ON transactions
+    FOR EACH ROW WHEN NOT EXISTS (
+      SELECT 1
+      FROM payment_sources source
+      JOIN balance_accounts account ON account.id = source.balance_account_id
+      WHERE source.id = NEW.payment_source_id
+        AND source.organization_id = NEW.organization_id
+        AND account.id = NEW.balance_account_id
+        AND account.organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'transaction source and balance account must belong to its organization');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_transaction_source_account_same_org_update
+    BEFORE UPDATE OF organization_id, balance_account_id, payment_source_id ON transactions
+    FOR EACH ROW WHEN NOT EXISTS (
+      SELECT 1
+      FROM payment_sources source
+      JOIN balance_accounts account ON account.id = source.balance_account_id
+      WHERE source.id = NEW.payment_source_id
+        AND source.organization_id = NEW.organization_id
+        AND account.id = NEW.balance_account_id
+        AND account.organization_id = NEW.organization_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'transaction source and balance account must belong to its organization');
+    END;
+  `);
   try {
     db.prepare('ALTER TABLE organizations ADD COLUMN telegram_bot_token TEXT').run();
   } catch {}
@@ -531,8 +634,9 @@ export function initSchema(db: DatabaseSync): void {
     }
   } catch {}
 
-  // Production and Clean Execution: strictly disable demo accounts and demo data
-  if (process.env.SEED_DEMO_DATA !== 'true') {
+  // Production and clean executions must never create a demo merchant. A
+  // deliberate local-only flag is the sole way to seed illustrative records.
+  if (process.env.SEED_DEMO_DATA !== 'true' || process.env.NODE_ENV === 'production') {
     try {
       db.prepare("UPDATE users SET is_active = 0 WHERE email = 'admin@cairologistics.com'").run();
       db.prepare("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE email = 'admin@cairologistics.com')").run();
@@ -544,7 +648,7 @@ export function initSchema(db: DatabaseSync): void {
   // Seed plans and platform operational tenant
   bootstrapPlatformAndPlans(db);
 
-  // Only seed in non-production environments if explicitly requested via SEED_DEMO_DATA=true
+  // Only seed in non-production environments if explicitly requested via SEED_DEMO_DATA=true.
   seedInitialData(db);
 }
 
@@ -558,7 +662,7 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
         nameEn: 'Monthly Plan — 3 Phones',
         nameAr: 'الباقة الشهرية — 3 هواتف',
         billingCycle: 'monthly',
-        priceEgp: 499.0,
+        priceMinor: 49900,
         deviceLimit: 3,
         features: [
           'realtime_reconciliation',
@@ -573,7 +677,7 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
         nameEn: 'Monthly Plan — 5 Phones',
         nameAr: 'الباقة الشهرية — 5 هواتف',
         billingCycle: 'monthly',
-        priceEgp: 799.0,
+        priceMinor: 79900,
         deviceLimit: 5,
         features: [
           'realtime_reconciliation',
@@ -589,7 +693,7 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
         nameEn: 'Annual Plan — 10 Phones',
         nameAr: 'الباقة السنوية — 10 هواتف',
         billingCycle: 'annual',
-        priceEgp: 7990.0,
+        priceMinor: 799000,
         deviceLimit: 10,
         features: [
           'realtime_reconciliation',
@@ -605,27 +709,18 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
 
     for (const p of plans) {
       db.prepare(`
-        INSERT INTO subscription_plans (id, name_en, name_ar, billing_cycle, price_egp, device_limit, features_json)
+        INSERT INTO subscription_plans (id, name_en, name_ar, billing_cycle, price_minor, device_limit, features_json)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(p.id, p.nameEn, p.nameAr, p.billingCycle, p.priceEgp, p.deviceLimit, JSON.stringify(p.features));
+      `).run(p.id, p.nameEn, p.nameAr, p.billingCycle, p.priceMinor, p.deviceLimit, JSON.stringify(p.features));
     }
   }
 
-  // Ensure 14-Day Free Trial Plan exists
-  const trial14PlanExists = db.prepare('SELECT id FROM subscription_plans WHERE id = ?').get('plan_trial_14d');
-  if (!trial14PlanExists) {
-    db.prepare(`
-      INSERT INTO subscription_plans (id, name_en, name_ar, billing_cycle, price_egp, device_limit, features_json, is_active)
-      VALUES ('plan_trial_14d', '14-Day Free Trial — 1 Phone', 'تجربة مجانية 14 يوم — هاتف واحد', 'monthly', 0.0, 1, ?, 0)
-    `).run(JSON.stringify(['realtime_reconciliation', 'macrodroid_agent', 'hmac_security', 'cbe_limits', 'audit_trail', 'csv_export']));
-  }
-
-  // Ensure 7-Day Free Trial Plan exists for legacy records
+  // Internal trial plan. It is not publicly purchasable and is always one phone for seven days.
   const trialPlanExists = db.prepare('SELECT id FROM subscription_plans WHERE id = ?').get('plan_trial_7d');
   if (!trialPlanExists) {
     db.prepare(`
-      INSERT INTO subscription_plans (id, name_en, name_ar, billing_cycle, price_egp, device_limit, features_json, is_active)
-      VALUES ('plan_trial_7d', '7-Day Free Trial — 1 Phone', 'تجربة مجانية 7 أيام — هاتف واحد', 'monthly', 0.0, 1, ?, 0)
+      INSERT INTO subscription_plans (id, name_en, name_ar, billing_cycle, price_minor, device_limit, features_json, is_active)
+      VALUES ('plan_trial_7d', '7-Day Free Trial — 1 Phone', 'تجربة مجانية 7 أيام — هاتف واحد', 'monthly', 0, 1, ?, 0)
     `).run(JSON.stringify(['realtime_reconciliation', 'macrodroid_agent', 'hmac_security', 'cbe_limits', 'audit_trail', 'csv_export']));
   }
 
@@ -647,13 +742,13 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
     `).run();
 
     db.prepare(`
-      INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance)
-      VALUES ('acc_platform_ops', 'org_platform_ops', 'Platform Subscription Revenue (EGP)', 'EGP', 0.0)
+      INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance_minor)
+      VALUES ('acc_platform_ops', 'org_platform_ops', 'Platform Subscription Revenue (EGP)', 'EGP', 0)
     `).run();
 
     db.prepare(`
-      INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit)
-      VALUES ('src_platform_instapay', 'org_platform_ops', 'acc_platform_ops', 'instapay', 'InstaPay Platform Subscriptions (01551234263)', '01551234263', 5000000.0, 20000000.0)
+      INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor)
+      VALUES ('src_platform_instapay', 'org_platform_ops', 'acc_platform_ops', 'instapay', 'InstaPay Platform Subscriptions (01551234263)', '01551234263', 500000000, 2000000000)
     `).run();
 
     db.prepare(`
@@ -662,15 +757,22 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
     `).run();
 
     db.prepare(`
-      INSERT INTO devices (id, organization_id, device_number, friendly_name, location, adapter_type, status, battery_level, agent_version, verified_at, notification_listener_granted, battery_optimization_exempt)
-      VALUES ('dev_platform_terminal', 'org_platform_ops', 'DEV-PLATFORM-01', 'Platform Owner Capture Phone', 'Platform HQ', 'native_agent', 'online', 100, 'v3.4.1-eg', datetime('now'), 1, 1)
+      INSERT INTO devices (id, organization_id, payment_source_id, device_number, friendly_name, location, adapter_type, status, battery_level, agent_version)
+      VALUES ('dev_platform_terminal', 'org_platform_ops', 'src_platform_instapay', 'DEV-PLATFORM-01', 'Platform Owner Capture Phone', 'Platform HQ', 'native_agent', 'offline', 100, 'unpaired')
     `).run();
+  }
 
+  // Earlier platform credentials used token version 1. Rotate that generation
+  // without keeping its former plaintext value in source control.
+  const platformCredential = db.prepare('SELECT hmac_secret, token_version FROM device_credentials WHERE device_id = ?').get('dev_platform_terminal') as { hmac_secret?: string; token_version?: number } | undefined;
+  const requiresRotation = !platformCredential?.hmac_secret || Number(platformCredential.token_version || 0) < 2;
+  if (requiresRotation) {
+    const generatedSecret = crypto.randomBytes(32).toString('hex');
     db.prepare(`
-      INSERT INTO device_credentials (device_id, hmac_secret)
-      VALUES ('dev_platform_terminal', 'sec_platform_owner_secret_token_sarraf')
-      ON CONFLICT(device_id) DO NOTHING
-    `).run();
+      INSERT INTO device_credentials (device_id, hmac_secret, token_version, revoked_at)
+      VALUES ('dev_platform_terminal', ?, 2, NULL)
+      ON CONFLICT(device_id) DO UPDATE SET hmac_secret = excluded.hmac_secret, revoked_at = NULL, token_version = MAX(device_credentials.token_version + 1, 2)
+    `).run(generatedSecret);
   }
 }
 
@@ -704,21 +806,21 @@ function seedInitialData(db: DatabaseSync): void {
   `).run('mem_01', orgId, userId, 'owner');
 
   db.prepare(`
-    INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance, version)
+    INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance_minor, version)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(balanceAccId, orgId, 'Cairo Operational Checking (EGP)', 'EGP', 48350.0, 1);
+  `).run(balanceAccId, orgId, 'Cairo Operational Checking (EGP)', 'EGP', 4835000, 1);
 
-  // Seed 4 Payment Sources
+  // Seed 4 Payment Sources (limits in piastres)
   const sources = [
-    { id: 'src_vf', provider: 'vodafone_cash', name: 'Vodafone Cash Main Merchant Line', num: '01019283921', daily: 60000.0, monthly: 200000.0 },
-    { id: 'src_ipn', provider: 'instapay', name: 'Cairo Logistics IPN Collector', num: 'cairo-logistics@instapay', daily: 120000.0, monthly: 400000.0 },
-    { id: 'src_oc', provider: 'orange_cash', name: 'Orange Cash Kiosk Collector', num: '01299880194', daily: 50000.0, monthly: 150000.0 },
-    { id: 'src_et', provider: 'etisalat_cash', name: 'e& Cash Warehouse Depot', num: '01198273612', daily: 50000.0, monthly: 150000.0 },
+    { id: 'src_vf', provider: 'vodafone_cash', name: 'Vodafone Cash Main Merchant Line', num: '01019283921', daily: 6000000, monthly: 20000000 },
+    { id: 'src_ipn', provider: 'instapay', name: 'Cairo Logistics IPN Collector', num: 'cairo-logistics@instapay', daily: 12000000, monthly: 40000000 },
+    { id: 'src_oc', provider: 'orange_cash', name: 'Orange Cash Kiosk Collector', num: '01299880194', daily: 5000000, monthly: 15000000 },
+    { id: 'src_et', provider: 'etisalat_cash', name: 'e& Cash Warehouse Depot', num: '01198273612', daily: 5000000, monthly: 15000000 },
   ];
 
   for (const s of sources) {
     db.prepare(`
-      INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit)
+      INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(s.id, orgId, balanceAccId, s.provider, s.name, s.num, s.daily, s.monthly);
 
@@ -746,6 +848,117 @@ function seedInitialData(db: DatabaseSync): void {
     db.prepare(`
       INSERT INTO device_credentials (device_id, hmac_secret)
       VALUES (?, ?)
-    `).run(d.id, `sec_secret_${d.id}_981247`);
+    `).run(d.id, crypto.randomBytes(32).toString('hex'));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Versioned migrations
+// ---------------------------------------------------------------------------
+
+/** Money columns converted by migration v1: [table, legacy REAL column, new INTEGER column, nullable]. */
+export const MONEY_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string, string, boolean]> = [
+  ['balance_accounts', 'current_balance', 'current_balance_minor', false],
+  ['payment_sources', 'daily_turnover_limit', 'daily_turnover_limit_minor', false],
+  ['payment_sources', 'monthly_turnover_limit', 'monthly_turnover_limit_minor', false],
+  ['transactions', 'amount', 'amount_minor', false],
+  ['transactions', 'stated_balance_after', 'stated_balance_after_minor', true],
+  ['balance_checkpoints', 'balance_amount', 'balance_amount_minor', false],
+  ['financial_limit_usage', 'accumulated_intake', 'accumulated_intake_minor', false],
+  ['financial_limit_usage', 'regulatory_cap', 'regulatory_cap_minor', false],
+  ['subscription_plans', 'price_egp', 'price_minor', false],
+  ['subscription_orders', 'price_egp', 'price_minor', false],
+  ['subscription_receipts', 'amount_paid', 'amount_paid_minor', false],
+];
+
+function columnExists(db: DatabaseSync, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return cols.some((c) => c.name === column);
+}
+
+function databaseFilePath(db: DatabaseSync): string | null {
+  const rows = db.prepare('PRAGMA database_list').all() as Array<{ name: string; file: string }>;
+  const main = rows.find((r) => r.name === 'main');
+  return main?.file ? main.file : null;
+}
+
+/**
+ * Migration v1: REAL EGP amounts -> INTEGER piastres.
+ *
+ * - Takes a consistent `VACUUM INTO` backup next to file databases first.
+ * - Refuses to migrate (and changes nothing) if any stored value carries a
+ *   sub-piastre fraction, so no historical amount is rounded silently.
+ * - Verifies per-column piastre totals before and after inside one
+ *   transaction; any mismatch rolls back.
+ * - Never deletes rows or changes source/transaction identifiers.
+ *
+ * Rollback: restore the `*.pre-v1-*.bak` file created by this migration.
+ */
+export function migrateMoneyToMinorUnits(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      details TEXT,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  const pending = MONEY_COLUMN_MIGRATIONS.filter(([table, legacy]) => columnExists(db, table, legacy));
+  if (pending.length === 0) {
+    db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, name, details) VALUES (1, 'money_to_minor_units', 'fresh schema')`).run();
+    return;
+  }
+
+  // 1. Guard: refuse sub-piastre values before touching anything.
+  const offending: string[] = [];
+  for (const [table, legacy] of pending) {
+    const row = db.prepare(`
+      SELECT COUNT(*) AS c FROM ${table}
+      WHERE ${legacy} IS NOT NULL AND ABS(${legacy} * 100 - ROUND(${legacy} * 100)) > 0.000001
+    `).get() as { c: number };
+    if (Number(row.c) > 0) offending.push(`${table}.${legacy} (${row.c})`);
+  }
+  if (offending.length > 0) {
+    throw new Error(`MIGRATION_V1_SUB_PIASTRE_VALUES: ${offending.join(', ')}. Correct these rows manually before upgrading.`);
+  }
+
+  // 2. Backup for file databases.
+  const file = databaseFilePath(db);
+  let backupPath: string | null = null;
+  if (file) {
+    backupPath = `${file}.pre-v1-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
+    db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);
+  }
+
+  // 3. Convert inside one transaction and verify totals.
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec('BEGIN IMMEDIATE;');
+  try {
+    const totals: Record<string, string> = {};
+    for (const [table, legacy, target, nullable] of pending) {
+      const before = db.prepare(`SELECT COALESCE(SUM(CAST(ROUND(${legacy} * 100) AS INTEGER)), 0) AS s FROM ${table}`).get() as { s: number };
+      if (!columnExists(db, table, target)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${target} INTEGER${nullable ? '' : ' NOT NULL DEFAULT 0'}`);
+      }
+      db.exec(`
+        UPDATE ${table}
+        SET ${target} = CASE WHEN ${legacy} IS NULL THEN ${nullable ? 'NULL' : '0'} ELSE CAST(ROUND(${legacy} * 100) AS INTEGER) END
+      `);
+      const after = db.prepare(`SELECT COALESCE(SUM(${target}), 0) AS s FROM ${table}`).get() as { s: number };
+      if (Number(before.s) !== Number(after.s)) {
+        throw new Error(`MIGRATION_V1_TOTAL_MISMATCH: ${table}.${legacy}`);
+      }
+      db.exec(`ALTER TABLE ${table} DROP COLUMN ${legacy}`);
+      totals[`${table}.${target}`] = String(after.s);
+    }
+    db.prepare(`INSERT OR REPLACE INTO schema_migrations (version, name, details) VALUES (1, 'money_to_minor_units', ?)`)
+      .run(JSON.stringify({ backup: backupPath ? path.basename(backupPath) : null, totalsMinor: totals }));
+    db.exec('COMMIT;');
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
   }
 }

@@ -24,15 +24,14 @@ import { PlatformDashboardView } from './components/PlatformDashboardView';
 import { LandingPageView } from './components/LandingPageView';
 import { VerifyEmailView } from './components/VerifyEmailView';
 import { InviteAcceptView } from './components/InviteAcceptView';
+import { apiFetch } from './api';
 
 export default function App() {
   // Public Routing & Path State
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname || '/');
 
   // Authentication & Session State
-  const [authToken, setAuthToken] = useState<string | null>(() => {
-    return localStorage.getItem('sarraf_session_token');
-  });
+  const [hasSession, setHasSession] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [userWorkspaces, setUserWorkspaces] = useState<any[]>([]);
@@ -116,17 +115,14 @@ export default function App() {
   };
 
   // Fetch current user session and tenant context
-  const verifySession = useCallback(async (token: string) => {
+  const verifySession = useCallback(async () => {
     setIsAuthLoading(true);
     try {
-      const res = await fetch('/api/v1/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      const res = await apiFetch('/api/v1/auth/me');
 
       if (res.ok) {
         const data = await res.json();
+        setHasSession(true);
         setCurrentUser(data.user);
         setWorkspace({
           id: data.organization.id,
@@ -141,9 +137,7 @@ export default function App() {
           setUserWorkspaces(data.workspaces);
         }
       } else {
-        // Token invalid or expired
-        localStorage.removeItem('sarraf_session_token');
-        setAuthToken(null);
+        setHasSession(false);
         setCurrentUser(null);
         setWorkspace(null);
         setCurrentSub(null);
@@ -157,16 +151,12 @@ export default function App() {
 
   // Fetch real data from backend API for the active authenticated tenant
   const refreshBackendData = useCallback(async () => {
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     try {
-      const headers = { 'Authorization': `Bearer ${token}` };
       const [txRes, devRes, railRes, subRes] = await Promise.all([
-        fetch('/api/v1/transactions', { headers }),
-        fetch('/api/v1/devices', { headers }),
-        fetch('/api/v1/sources', { headers }),
-        fetch('/api/v1/subscriptions/current', { headers }),
+        apiFetch('/api/v1/transactions'),
+        apiFetch('/api/v1/devices'),
+        apiFetch('/api/v1/sources'),
+        apiFetch('/api/v1/subscriptions/current'),
       ]);
 
       if (subRes.ok) {
@@ -237,7 +227,8 @@ export default function App() {
         setRails(
           Array.isArray(railData)
             ? railData.map((r: any) => ({
-                id: r.provider,
+                id: r.id,
+                provider: r.provider,
                 name: r.name || r.provider,
                 sharePercentage: r.sharePercentage || 0,
                 volume: r.volume || 0,
@@ -247,6 +238,10 @@ export default function App() {
                 walletNumber: r.walletNumber || r.primaryAddress || '',
                 dailyLimit: r.dailyLimit || 60000,
                 monthlyLimit: r.monthlyLimit || 200000,
+                dailyIntake: r.dailyIntake,
+                monthlyIntake: r.monthlyIntake,
+                dailyPercentage: r.dailyPercentage,
+                monthlyPercentage: r.monthlyPercentage,
                 isPaused: r.isPaused || false,
               }))
             : []
@@ -264,12 +259,8 @@ export default function App() {
 
   // Initial Auth Check
   useEffect(() => {
-    if (authToken) {
-      verifySession(authToken);
-    } else {
-      setIsAuthLoading(false);
-    }
-  }, [authToken, verifySession]);
+    verifySession();
+  }, [verifySession]);
 
   // Load tenant data whenever workspace is established
   useEffect(() => {
@@ -280,19 +271,19 @@ export default function App() {
 
   // Live Real-Time Telemetry Auto-Sync: Poll every 3 seconds while in active workspace
   useEffect(() => {
-    if (!authToken || !currentUser || !workspace) return;
+    if (!hasSession || !currentUser || !workspace) return;
     const interval = setInterval(() => {
       refreshBackendData();
     }, 3000);
     return () => clearInterval(interval);
-  }, [authToken, currentUser, workspace, refreshBackendData]);
+  }, [hasSession, currentUser, workspace, refreshBackendData]);
 
   const handleToggleLanguage = () => {
     setLanguage((prev) => (prev === 'en' ? 'ar' : 'en'));
   };
 
-  const handleAuthSuccess = (token: string, user: User, org: Workspace) => {
-    setAuthToken(token);
+  const handleAuthSuccess = (user: User, org: Workspace) => {
+    setHasSession(true);
     setCurrentUser(user);
     setWorkspace(org);
     navigate('/app');
@@ -305,17 +296,10 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    const token = localStorage.getItem('sarraf_session_token');
-    if (token) {
-      try {
-        await fetch('/api/v1/auth/logout', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-      } catch {}
-    }
-    localStorage.removeItem('sarraf_session_token');
-    setAuthToken(null);
+    try {
+      await apiFetch('/api/v1/auth/logout', { method: 'POST' });
+    } catch {}
+    setHasSession(false);
     setCurrentUser(null);
     setWorkspace(null);
     setCurrentSub(null);
@@ -330,11 +314,8 @@ export default function App() {
   // Approve review transaction via real backend API
   const handleApproveTransaction = async (tx: Transaction) => {
     try {
-      const res = await fetch(`/api/v1/transactions/${tx.id}/approve`, {
+      const res = await apiFetch(`/api/v1/transactions/${tx.id}/approve`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
       });
       if (res.ok) {
         await refreshBackendData();
@@ -362,11 +343,8 @@ export default function App() {
   // Reject review transaction via real backend API
   const handleRejectTransaction = async (tx: Transaction) => {
     try {
-      const res = await fetch(`/api/v1/transactions/${tx.id}/reject`, {
+      const res = await apiFetch(`/api/v1/transactions/${tx.id}/reject`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
       });
       if (res.ok) {
         await refreshBackendData();
@@ -394,11 +372,8 @@ export default function App() {
   // Toggle device status (online / offline) via real backend
   const handleToggleDeviceStatus = async (deviceId: string) => {
     try {
-      const res = await fetch(`/api/v1/devices/${deviceId}/toggle`, {
+      const res = await apiFetch(`/api/v1/devices/${deviceId}/toggle`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
       });
       if (res.ok) {
         await refreshBackendData();
@@ -422,16 +397,34 @@ export default function App() {
     );
   };
 
+  const handleToggleRailPause = async (sourceId: string) => {
+    try {
+      const res = await apiFetch(`/api/v1/sources/${sourceId}/toggle-pause`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Unable to update source status');
+      }
+      await refreshBackendData();
+    } catch (err: any) {
+      showToast(
+        language === 'ar'
+          ? (err.message || 'تعذر تحديث حالة مصدر الاستقبال.')
+          : (err.message || 'Unable to update the receiving source.')
+      );
+    }
+  };
+
   // Switch workspace
   const handleSwitchWorkspace = async () => {
     if (userWorkspaces.length > 1) {
       const nextOrg = userWorkspaces.find((w) => w.id !== workspace?.id) || userWorkspaces[0];
       try {
-        const res = await fetch('/api/v1/auth/switch-workspace', {
+        const res = await apiFetch('/api/v1/auth/switch-workspace', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
           },
           body: JSON.stringify({ organizationId: nextOrg.id }),
         });
@@ -484,7 +477,7 @@ export default function App() {
         language={language}
         onToggleLanguage={handleToggleLanguage}
         onNavigate={navigate}
-        isLoggedIn={Boolean(authToken && currentUser && workspace)}
+        isLoggedIn={Boolean(hasSession && currentUser && workspace)}
         theme={theme}
         onToggleTheme={handleToggleTheme}
       />
@@ -493,7 +486,7 @@ export default function App() {
 
   // 3. Public Login Page at '/login'
   if (currentPath === '/login') {
-    if (authToken && currentUser && workspace) {
+    if (hasSession && currentUser && workspace) {
       // Already authenticated, redirect to /app
       navigate('/app');
     } else {
@@ -513,7 +506,7 @@ export default function App() {
 
   // 4. Public Signup Page at '/signup'
   if (currentPath === '/signup') {
-    if (authToken && currentUser && workspace) {
+    if (hasSession && currentUser && workspace) {
       // Already authenticated, redirect to /app
       navigate('/app');
     } else {
@@ -561,7 +554,7 @@ export default function App() {
   }
 
   // 7. Protected Client Dashboard at '/app' (and any other authenticated view)
-  if (!authToken || !currentUser || !workspace) {
+  if (!hasSession || !currentUser || !workspace) {
     return (
       <AuthView
         initialTab="login"
@@ -633,8 +626,8 @@ export default function App() {
                 </span>
                 <span className="text-on-surface-variant text-xs mr-2 rtl:mr-0 rtl:ml-2">
                   {language === 'ar'
-                    ? `باقي لك ${currentSub.daysRemaining} يوماً لتجربة صرّاف مع هاتف واحد (ينتهي في ${currentSub.endsAt ? new Date(currentSub.endsAt).toLocaleDateString('ar-EG') : '14 يوم'}). اختار باقتك في أي وقت عشان تكمل متابعة شغلك.`
-                    : `${currentSub.daysRemaining} days remaining for testing with 1 terminal (expires ${currentSub.endsAt ? new Date(currentSub.endsAt).toLocaleDateString('en-US') : 'in 14 days'}). Choose your plan anytime to keep tracking.`}
+                    ? `باقي لك ${currentSub.daysRemaining} يوماً لتجربة صرّاف مع هاتف واحد (ينتهي في ${currentSub.endsAt ? new Date(currentSub.endsAt).toLocaleDateString('ar-EG') : '7 أيام'}). اختار باقتك في أي وقت عشان تكمل متابعة شغلك.`
+                    : `${currentSub.daysRemaining} days remaining for testing with 1 terminal (expires ${currentSub.endsAt ? new Date(currentSub.endsAt).toLocaleDateString('en-US') : 'in 7 days'}). Choose your plan anytime to keep tracking.`}
                 </span>
               </div>
             </div>
@@ -695,7 +688,7 @@ export default function App() {
           <button
             onClick={async () => {
               try {
-                const res = await fetch('/api/v1/auth/resend-verification', {
+                const res = await apiFetch('/api/v1/auth/resend-verification', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ email: currentUser.email }),
@@ -758,6 +751,7 @@ export default function App() {
         <RailsView
           rails={rails}
           onUpdateRails={(updated) => setRails(updated)}
+          onTogglePause={handleToggleRailPause}
           onOpenAddSource={() => setIsAddSourceOpen(true)}
           language={language}
         />
@@ -787,7 +781,7 @@ export default function App() {
         />
       )}
 
-      {currentTab === 'platform' && (
+      {currentTab === 'platform' && currentUser.isPlatformAdmin && (
         <PlatformDashboardView
           language={language}
           showToast={showToast}
@@ -859,6 +853,7 @@ export default function App() {
               : `Device registered: ${newDev.name}`
           );
         }}
+        rails={rails}
         language={language}
       />
 

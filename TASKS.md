@@ -1,5 +1,7 @@
 # Master Executable Tasks: Sarraf Ops SaaS Evolution
 
+> **سجل تاريخي:** مربعات هذه القائمة كتبت قبل التنفيذ الحالي ولا تمثل حالة تشغيل مباشرة. لا تستخدمها لتأكيد أن خدمة أو واجهة حية. اعتمد `docs/PRODUCT_CONTRACT.md` للمتطلبات الثابتة وحالة التخزين والتحقق الخارجي، ونتائج CI للاختبارات الفعلية.
+
 ## Execution Invariants for Future Coding Agents
 1. Read `CONSTITUTION.md` and the relevant architecture specifications before touching code.
 2. Work on ONE task at a time.

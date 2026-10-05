@@ -6,7 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
-data/*.db*
-data/*.db-wal
-data/*.db-shm
+data/*
+!data/README.md
 
+
+# Never commit databases or migration backups
+*.db
+*.db-wal
+*.db-shm
+*.bak

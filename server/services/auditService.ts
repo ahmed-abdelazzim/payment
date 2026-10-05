@@ -11,6 +11,29 @@ export interface AuditLogInput {
   details?: Record<string, any>;
 }
 
+const SENSITIVE_DETAIL_KEY = /(?:token|secret|password|authorization|cookie|api[_-]?key|hmac|raw_?payload|sms_?body)/i;
+const SENSITIVE_QUERY_VALUE = /([?&](?:token|secret|password|authorization|api[_-]?key)=)[^&#\s]+/gi;
+
+function redactAuditDetails(value: unknown, key = '', depth = 0): unknown {
+  if (depth > 8) return '[TRUNCATED]';
+  if (SENSITIVE_DETAIL_KEY.test(key)) return '[REDACTED]';
+  if (typeof value === 'string') {
+    return value.replace(SENSITIVE_QUERY_VALUE, '$1[REDACTED]');
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactAuditDetails(item, key, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+        childKey,
+        redactAuditDetails(childValue, childKey, depth + 1),
+      ])
+    );
+  }
+  return value;
+}
+
 export class AuditService {
   static record(input: AuditLogInput): void {
     const db = getDatabase();
@@ -27,7 +50,7 @@ export class AuditService {
       input.resourceType,
       input.resourceId,
       input.originIp || '127.0.0.1',
-      input.details ? JSON.stringify(input.details) : null
+      input.details ? JSON.stringify(redactAuditDetails(input.details)) : null
     );
   }
 

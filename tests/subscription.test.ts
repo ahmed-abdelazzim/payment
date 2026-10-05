@@ -55,8 +55,8 @@ test('Subscription 1: Purchasing and Renewing All 3 Plans with Exact Prices and 
   // Simulate real inbound payment on the platform owner receiver (org_platform_ops)
   const platformTx1Id = 'tx_plat_499_01';
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, financial_event_at)
-    VALUES (?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-TRX-499-ALPHA', 'instapay', 499.0, 'confirmed', 'consistent', 1.0, datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, signature, financial_event_at)
+    VALUES (?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-TRX-499-ALPHA', 'instapay', 49900, 'confirmed', 'consistent', 1.0, 'valid_hmac_signature', datetime('now'))
   `).run(platformTx1Id);
 
   // Merchant reports transfer proof with reference
@@ -82,8 +82,8 @@ test('Subscription 1: Purchasing and Renewing All 3 Plans with Exact Prices and 
   const orderRenewal = SubscriptionService.createOrder({ organizationId: orgId, userId, planId: p1.id });
   const platformTxRenewalId = 'tx_plat_499_renewal';
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, financial_event_at)
-    VALUES (?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-TRX-499-BETA', 'instapay', 499.0, 'confirmed', 'consistent', 1.0, datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, signature, financial_event_at)
+    VALUES (?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-TRX-499-BETA', 'instapay', 49900, 'confirmed', 'consistent', 1.0, 'valid_hmac_signature', datetime('now'))
   `).run(platformTxRenewalId);
 
   SubscriptionService.reportPayment({
@@ -104,8 +104,8 @@ test('Subscription 1: Purchasing and Renewing All 3 Plans with Exact Prices and 
 
   const platformTxUpgradeId = 'tx_plat_7990_upgrade';
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, financial_event_at)
-    VALUES (?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-TRX-7990-GAMMA', 'instapay', 7990.0, 'confirmed', 'consistent', 1.0, datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, signature, financial_event_at)
+    VALUES (?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-TRX-7990-GAMMA', 'instapay', 799000, 'confirmed', 'consistent', 1.0, 'valid_hmac_signature', datetime('now'))
   `).run(platformTxUpgradeId);
 
   SubscriptionService.reportPayment({
@@ -143,13 +143,13 @@ test('Subscription 2: Two Transfers with Exact Same Amount for Two Different Use
 
   // Two separate inbound transfers arrive on platform owner receiver for 499.0 EGP
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, sender_phone, financial_event_at)
-    VALUES ('tx_499_A', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-REF-A-1111', 'instapay', 499.0, 'confirmed', 'consistent', 1.0, '01511111111', datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, sender_phone, signature, financial_event_at)
+    VALUES ('tx_499_A', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-REF-A-1111', 'instapay', 49900, 'confirmed', 'consistent', 1.0, '01511111111', 'valid_hmac_signature', datetime('now'))
   `).run();
 
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, sender_phone, financial_event_at)
-    VALUES ('tx_499_B', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-REF-B-2222', 'instapay', 499.0, 'confirmed', 'consistent', 1.0, '01522222222', datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, sender_phone, signature, financial_event_at)
+    VALUES ('tx_499_B', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-REF-B-2222', 'instapay', 49900, 'confirmed', 'consistent', 1.0, '01522222222', 'valid_hmac_signature', datetime('now'))
   `).run();
 
   // User A reports payment with Reference A
@@ -198,8 +198,8 @@ test('Subscription 3: Preventing Double-Spending (Same Inbound Transfer Cannot A
 
   // Single inbound transaction of 499.0 EGP
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, financial_event_at)
-    VALUES ('tx_single_spend', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-SINGLE-SPEND', 'instapay', 499.0, 'confirmed', 'consistent', 1.0, datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, signature, financial_event_at)
+    VALUES ('tx_single_spend', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-SINGLE-SPEND', 'instapay', 49900, 'confirmed', 'consistent', 1.0, 'valid_hmac_signature', datetime('now'))
   `).run();
 
   // Order 1 claims it and gets confirmed
@@ -254,6 +254,57 @@ test('Subscription 4: Rejecting Activation when User Submits Unverified Referenc
 
   const sub = SubscriptionService.getOrganizationSubscription(org);
   assert.strictEqual(sub.hasSubscription, false, 'Subscription remains inactive until verified');
+});
+
+test('Subscription 4b: Merchant claim, sender details, or partial reference never auto-activate without one trusted exact platform reference', () => {
+  const db = initTestDatabase();
+  setDatabase(db);
+
+  const orgId = 'org_reference_proof';
+  const userId = 'usr_reference_proof';
+  db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Proof Shop', 'متجر الإثبات', 'proof-shop')`).run(orgId);
+  db.prepare(`INSERT INTO users (id, email, password_hash, full_name) VALUES (?, 'proof@shop.eg', 'h', 'Proof User')`).run(userId);
+
+  const untrustedOrder = SubscriptionService.createOrder({ organizationId: orgId, userId, planId: 'plan_monthly_3' });
+  db.prepare(`
+    INSERT INTO transactions (
+      id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider,
+      amount_minor, status, reconciliation_state, provenance_confidence, sender_phone, financial_event_at
+    ) VALUES (
+      'tx_untrusted_reference', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-UNTRUSTED-499', 'instapay',
+      49900, 'confirmed', 'consistent', 1.0, '01000000000', datetime('now')
+    )
+  `).run();
+
+  const untrustedReport = SubscriptionService.reportPayment({
+    orderId: untrustedOrder.id,
+    organizationId: orgId,
+    reportedTransferRef: 'IPN-UNTRUSTED-499',
+    reportedSenderInfo: '01000000000',
+  });
+  assert.strictEqual(untrustedReport.matched, false);
+  assert.strictEqual(untrustedReport.order.status, 'in_review');
+
+  const partialReferenceOrder = SubscriptionService.createOrder({ organizationId: orgId, userId, planId: 'plan_monthly_3' });
+  db.prepare(`
+    INSERT INTO transactions (
+      id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider,
+      amount_minor, status, reconciliation_state, provenance_confidence, signature, financial_event_at
+    ) VALUES (
+      'tx_trusted_full_reference', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-FULL-REFERENCE-499', 'instapay',
+      49900, 'confirmed', 'consistent', 1.0, 'valid_hmac_signature', datetime('now')
+    )
+  `).run();
+
+  const partialReport = SubscriptionService.reportPayment({
+    orderId: partialReferenceOrder.id,
+    organizationId: orgId,
+    reportedTransferRef: 'IPN-FULL-REFERENCE',
+    reportedSenderInfo: '01000000000',
+  });
+  assert.strictEqual(partialReport.matched, false);
+  assert.strictEqual(partialReport.order.status, 'in_review');
+  assert.strictEqual(SubscriptionService.getOrganizationSubscription(orgId).hasSubscription, false);
 });
 
 test('Subscription 5: Strict Server-Side Device Limit Enforcement & Concurrent Pairing Prevention', () => {
@@ -323,8 +374,8 @@ test('Subscription 6: Late Transfer Handling on Expired Orders', () => {
 
   // Late transaction arrives on platform receiver
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, financial_event_at)
-    VALUES ('tx_late_499', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-LATE-ARRIVAL', 'instapay', 499.0, 'confirmed', 'consistent', 1.0, datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, financial_event_at)
+    VALUES ('tx_late_499', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-LATE-ARRIVAL', 'instapay', 49900, 'confirmed', 'consistent', 1.0, datetime('now'))
   `).run();
 
   // Platform owner reviews late transfer and approves order

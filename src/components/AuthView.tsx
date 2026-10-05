@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { User, Workspace } from '../types';
+import { apiFetch } from '../api';
 
 interface AuthViewProps {
-  onSuccess: (token: string, user: User, org: Workspace) => void;
+  onSuccess: (user: User, org: Workspace) => void;
   language: 'en' | 'ar';
   onToggleLanguage: () => void;
   initialTab?: 'login' | 'signup';
@@ -38,9 +39,13 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
   // Forgot password form state
   const [forgotEmail, setForgotEmail] = useState('');
-  const [resetToken, setResetToken] = useState('');
+  const [resetToken, setResetToken] = useState(() =>
+    typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('resetToken') || ''
+  );
   const [newPassword, setNewPassword] = useState('');
-  const [isResetStep, setIsResetStep] = useState(false);
+  const [isResetStep, setIsResetStep] = useState(() =>
+    typeof window !== 'undefined' && Boolean(new URLSearchParams(window.location.search).get('resetToken'))
+  );
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,7 +53,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/v1/auth/login', {
+      const res = await apiFetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: loginEmail, password: loginPassword }),
@@ -59,9 +64,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         throw new Error(data.message || (language === 'ar' ? 'فشل تسجيل الدخول' : 'Login failed'));
       }
 
-      localStorage.setItem('sarraf_session_token', data.token);
       onSuccess(
-        data.token,
         {
           id: data.user.id,
           email: data.user.email,
@@ -91,7 +94,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/v1/auth/signup', {
+      const res = await apiFetch('/api/v1/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -108,9 +111,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         throw new Error(data.message || (language === 'ar' ? 'فشل إنشاء الحساب' : 'Signup failed'));
       }
 
-      localStorage.setItem('sarraf_session_token', data.token);
       onSuccess(
-        data.token,
         {
           id: data.user.id,
           email: data.user.email,
@@ -141,7 +142,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/v1/auth/forgot-password', {
+      const res = await apiFetch('/api/v1/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail }),
@@ -152,11 +153,12 @@ export const AuthView: React.FC<AuthViewProps> = ({
         throw new Error(data.message || 'Request failed');
       }
 
-      setInfoMessage(data.message);
-      if (data.reset_token) {
-        setResetToken(data.reset_token);
-        setIsResetStep(true);
-      }
+      setInfoMessage(
+        data.message ||
+          (language === 'ar'
+            ? 'إذا كان البريد مسجلاً، أرسلنا رابطاً آمناً لإعادة تعيين كلمة المرور.'
+            : 'If that email is registered, we sent a secure password-reset link.')
+      );
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -171,7 +173,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/v1/auth/reset-password', {
+      const res = await apiFetch('/api/v1/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: resetToken, newPassword }),
@@ -264,8 +266,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   : 'Start with a clean slate workspace dedicated to your business')}
               {tab === 'forgot' &&
                 (language === 'ar'
-                  ? 'أدخل بريدك الإلكتروني لاستلام رمز تعيين كلمة المرور'
-                  : 'Enter your email address to receive your password reset token')}
+                  ? 'أدخل بريدك الإلكتروني لاستلام رابط آمن لتعيين كلمة المرور'
+                  : 'Enter your email address to receive a secure password-reset link')}
             </p>
           </div>
 
@@ -384,7 +386,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 <span className="material-symbols-outlined text-base mt-0.5 shrink-0">verified</span>
                 <div>
                   <span className="font-bold block">
-                    {language === 'ar' ? 'تشمل 14 يوم تجربة مجانية تلقائياً' : 'Includes 14-Day Free Trial Automatically'}
+                    {language === 'ar' ? 'تشمل 7 أيام تجربة مجانية تلقائياً' : 'Includes 7-Day Free Trial Automatically'}
                   </span>
                   <p className="text-on-surface-variant text-[11px] mt-0.5">
                     {language === 'ar'
@@ -469,8 +471,8 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 <span className="material-symbols-outlined text-base text-primary">credit_card_off</span>
                 <span>
                   {language === 'ar'
-                    ? 'التجربة المجانية (14 يوم) لا تحتاج إلى كريديت كارد أو دفع مسبق'
-                    : 'Free 14-day trial: No credit card or upfront payment required'}
+                    ? 'التجربة المجانية (7 أيام) لا تحتاج إلى كريديت كارد أو دفع مسبق'
+                    : 'Free 7-day trial: No credit card or upfront payment required'}
                 </span>
               </div>
 
@@ -518,14 +520,14 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     ) : (
                       <span className="material-symbols-outlined text-lg">send</span>
                     )}
-                    <span>{language === 'ar' ? 'إرسال رمز الاستعادة' : 'Generate Reset Code'}</span>
+                    <span>{language === 'ar' ? 'إرسال رابط الاستعادة' : 'Send Reset Link'}</span>
                   </button>
                 </form>
               ) : (
                 <form onSubmit={handleResetPassword} className="space-y-4">
                   <div>
                     <label className="block text-label-md text-on-surface font-medium mb-1.5">
-                      {language === 'ar' ? 'رمز الاستعادة (Reset Token)' : 'Reset Token'}
+                      {language === 'ar' ? 'رمز الاستعادة' : 'Reset token'}
                     </label>
                     <input
                       type="text"

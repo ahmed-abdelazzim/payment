@@ -1,15 +1,25 @@
 import { getDatabase } from '../db';
 import { ParsedTransaction } from '../parser/engine';
+import { LimitEngine } from './limitEngine';
+import { toMinor, fromMinor, MoneyError } from '../money';
 
 export interface IngestionEventInput {
   organizationId: string;
   deviceId: string;
+  /** The source bound to the capture device during pairing. Never infer this from SMS text. */
+  paymentSourceId?: string | null;
   rawEventId: string;
   adapterType: string;
   boundPaymentAddress: string;
   parsed: ParsedTransaction;
   financialEventAt: string;
   signature?: string;
+  /**
+   * Set only by a future bank/wallet settlement connector or a controlled
+   * operator workflow. A signed SMS capture is deliberately not independent
+   * settlement proof by itself.
+   */
+  independentSettlementEvidence?: boolean;
 }
 
 export interface ReconciliationResult {
@@ -17,21 +27,47 @@ export interface ReconciliationResult {
   externalTrxId: string;
   status: 'confirmed' | 'review_required' | 'pending_ordering' | 'failed';
   reconciliationState: 'consistent' | 'gap_detected' | 'pending_ordering';
+  /** EGP, derived from integer piastres for API compatibility. */
   balanceBefore: number;
+  /** EGP, derived from integer piastres for API compatibility. */
   balanceAfter: number;
   isDuplicate: boolean;
   reviewReason?: string;
   unresolvedGapsCount?: number;
 }
 
+function markRawEvent(db: any, rawEventId: string, organizationId: string, status: string): void {
+  db.prepare(`
+    UPDATE raw_events
+    SET processing_status = ?
+    WHERE id = ? AND organization_id = ?
+  `).run(status, rawEventId, organizationId);
+}
+
+function reviewResult(input: IngestionEventInput, reviewReason: string): ReconciliationResult {
+  return {
+    transactionId: input.rawEventId,
+    externalTrxId: input.parsed.externalTrxId,
+    status: 'review_required',
+    reconciliationState: 'gap_detected',
+    balanceBefore: 0,
+    balanceAfter: 0,
+    isDuplicate: false,
+    reviewReason,
+  };
+}
+
 export class ReconciliationService {
   /**
    * Reconciles an inbound parsed transaction with atomic per-account database locking.
+   * All ledger arithmetic is performed in integer piastres.
    */
   static processInboundTransaction(input: IngestionEventInput): ReconciliationResult {
     const db = getDatabase();
 
-    // 1. Resolve Bound Payment Source and Balance Account
+    // 1. Resolve the source that was bound to the capture device at pairing time.
+    // SMS sender labels and a caller-provided address are useful metadata only; they are
+    // never allowed to select a wallet or bank ledger automatically.
     if (input.rawEventId) {
       const existingRaw = db.prepare('SELECT id FROM raw_events WHERE id = ?').get(input.rawEventId);
       if (!existingRaw) {
@@ -43,91 +79,72 @@ export class ReconciliationService {
       }
     }
 
-    const addressRow = db.prepare(`
-      SELECT a.payment_source_id, s.balance_account_id, s.provider, s.is_paused_for_new_instructions
-      FROM payment_addresses a
-      JOIN payment_sources s ON a.payment_source_id = s.id
-      WHERE s.organization_id = ? AND a.address_value = ?
-      LIMIT 1
-    `).get(input.organizationId, input.boundPaymentAddress) as any;
+    const deviceBinding = !input.paymentSourceId
+      ? db.prepare(`
+          SELECT payment_source_id
+          FROM devices
+          WHERE id = ? AND organization_id = ?
+        `).get(input.deviceId, input.organizationId) as { payment_source_id?: string | null } | undefined
+      : undefined;
+    const paymentSourceIdFromDevice = input.paymentSourceId || deviceBinding?.payment_source_id || null;
 
-    let paymentSourceId = addressRow?.payment_source_id;
-    let balanceAccountId = addressRow?.balance_account_id;
-    let provider = addressRow?.provider || input.parsed.provider;
+    const source = paymentSourceIdFromDevice
+      ? db.prepare(`
+          SELECT id, balance_account_id, provider
+          FROM payment_sources
+          WHERE id = ? AND organization_id = ?
+        `).get(paymentSourceIdFromDevice, input.organizationId) as any
+      : null;
 
-    if (!paymentSourceId || !balanceAccountId) {
-      // Fallback to first provider source in organization
-      const fallbackSource = db.prepare(`
-        SELECT id, balance_account_id, provider
-        FROM payment_sources
-        WHERE organization_id = ? AND provider = ?
-        LIMIT 1
-      `).get(input.organizationId, input.parsed.provider) as any;
+    if (!source) {
+      markRawEvent(db, input.rawEventId, input.organizationId, 'review_required_source_binding');
+      return reviewResult(input, 'Capture device is not bound to an approved payment source.');
+    }
 
-      if (fallbackSource) {
-        paymentSourceId = fallbackSource.id;
-        balanceAccountId = fallbackSource.balance_account_id;
-        provider = fallbackSource.provider;
-      } else {
-        // Find or create default balance account
-        const defaultAcc = db.prepare(`
-          SELECT id FROM balance_accounts WHERE organization_id = ? LIMIT 1
-        `).get(input.organizationId) as any;
-        balanceAccountId = defaultAcc?.id;
+    const paymentSourceId = source.id as string;
+    const balanceAccountId = source.balance_account_id as string;
+    const provider = source.provider as string;
 
-        if (!balanceAccountId) {
-          balanceAccountId = `acc_${input.organizationId}`;
-          db.prepare(`
-            INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance)
-            VALUES (?, ?, 'Main Account', 'EGP', 0.0)
-          `).run(balanceAccountId, input.organizationId);
-        }
+    if (input.parsed.provider !== provider) {
+      markRawEvent(db, input.rawEventId, input.organizationId, 'review_required_provider_mismatch');
+      return reviewResult(
+        input,
+        `Parsed provider ${input.parsed.provider} does not match the device-bound source provider ${provider}.`
+      );
+    }
 
-        // Auto-create payment source so foreign key constraint is satisfied!
-        paymentSourceId = `src_${input.organizationId}_${input.parsed.provider}`;
-        const sourceExists = db.prepare('SELECT id FROM payment_sources WHERE id = ?').get(paymentSourceId);
-        if (!sourceExists) {
-          const providerLabels: Record<string, string> = {
-            vodafone_cash: 'فودافون كاش',
-            instapay: 'إنستاباي',
-            orange_cash: 'أورنج كاش',
-            etisalat_cash: 'اتصالات كاش',
-          };
-          db.prepare(`
-            INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit)
-            VALUES (?, ?, ?, ?, ?, ?, 60000.0, 200000.0)
-          `).run(
-            paymentSourceId,
-            input.organizationId,
-            balanceAccountId,
-            input.parsed.provider,
-            providerLabels[input.parsed.provider] || `${input.parsed.provider} Wallet`,
-            input.boundPaymentAddress || '01000000000'
-          );
-
-          db.prepare(`
-            INSERT INTO payment_addresses (id, payment_source_id, address_type, address_value, is_default_for_invoices)
-            VALUES (?, ?, 'msisdn', ?, 1)
-          `).run(`addr_${paymentSourceId}`, paymentSourceId, input.boundPaymentAddress || '01000000000');
-        }
+    // Exact amounts. A malformed or sub-piastre amount is never rounded into the ledger.
+    let amountMinor: number;
+    let statedBalanceMinor: number | undefined;
+    try {
+      amountMinor = toMinor(input.parsed.amount, { allowZero: false });
+      statedBalanceMinor = input.parsed.statedBalance !== undefined
+        ? toMinor(input.parsed.statedBalance, { allowNegative: true })
+        : undefined;
+    } catch (err) {
+      if (err instanceof MoneyError) {
+        markRawEvent(db, input.rawEventId, input.organizationId, 'review_required_invalid_amount');
+        return reviewResult(input, `Parsed amount is not an exact EGP value (${err.message}).`);
       }
+      throw err;
     }
 
     // 2. Financial Idempotency Check: Prevent Duplicate Transactions
     const existingTrx = db.prepare(`
-      SELECT id, status, reconciliation_state, stated_balance_after, amount
+      SELECT id, status, reconciliation_state, stated_balance_after_minor, amount_minor
       FROM transactions
       WHERE organization_id = ? AND provider = ? AND external_trx_id = ?
     `).get(input.organizationId, provider, input.parsed.externalTrxId) as any;
 
     if (existingTrx) {
+      const afterMinor = Number(existingTrx.stated_balance_after_minor ?? 0);
       return {
         transactionId: existingTrx.id,
         externalTrxId: input.parsed.externalTrxId,
         status: existingTrx.status,
         reconciliationState: existingTrx.reconciliation_state,
-        balanceBefore: (existingTrx.stated_balance_after || 0) - existingTrx.amount,
-        balanceAfter: existingTrx.stated_balance_after || 0,
+        balanceBefore: fromMinor(afterMinor - Number(existingTrx.amount_minor)),
+        balanceAfter: fromMinor(afterMinor),
         isDuplicate: true,
       };
     }
@@ -138,14 +155,14 @@ export class ReconciliationService {
 
     try {
       const account = db.prepare(`
-        SELECT id, current_balance, version
+        SELECT id, current_balance_minor, version
         FROM balance_accounts
         WHERE id = ?
       `).get(balanceAccountId) as any;
 
-      const currentBalance = account?.current_balance || 0.0;
-      let balanceBefore = currentBalance;
-      let balanceAfter = currentBalance;
+      const currentMinor = Number(account?.current_balance_minor ?? 0);
+      let balanceBeforeMinor = currentMinor;
+      let balanceAfterMinor = currentMinor;
       let status: 'confirmed' | 'review_required' | 'pending_ordering' | 'failed' = 'confirmed';
       let reconciliationState: 'consistent' | 'gap_detected' | 'pending_ordering' = 'consistent';
       let reviewReason = input.parsed.unverifiedWarning;
@@ -154,56 +171,73 @@ export class ReconciliationService {
       // Rule: Arithmetic consistency does NOT prove authenticity!
       const isUnverifiedChannel = input.adapterType === 'manual' || !input.signature;
       const hasAnomalyWarning = !!input.parsed.unverifiedWarning;
+      const hasIndependentSettlementEvidence = input.independentSettlementEvidence === true;
 
-      if (isUnverifiedChannel || hasAnomalyWarning) {
-        // Quarantined into Review Queue
+      const checkpoint = db.prepare(`
+        SELECT id, checkpoint_type
+        FROM balance_checkpoints
+        WHERE balance_account_id = ?
+        ORDER BY as_of_timestamp DESC, created_at DESC
+        LIMIT 1
+      `).get(balanceAccountId) as { id?: string; checkpoint_type?: string } | undefined;
+      const hasAnchor = Boolean(checkpoint?.id);
+
+      const advanceLedger = (nextMinor: number) => {
+        db.prepare(`
+          UPDATE balance_accounts
+          SET current_balance_minor = ?, version = version + 1, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(nextMinor, balanceAccountId);
+      };
+
+      if (!hasAnchor) {
+        status = 'review_required';
+        reconciliationState = 'gap_detected';
+        reviewReason = 'A trusted opening balance checkpoint is required before automatic reconciliation.';
+      } else if (isUnverifiedChannel || hasAnomalyWarning) {
+        // Quarantined into Review Queue; canonical balance does not advance until review.
         status = 'review_required';
         reconciliationState = hasAnomalyWarning ? 'gap_detected' : 'consistent';
-        balanceAfter = currentBalance; // do not advance canonical balance until review
-      } else if (input.parsed.statedBalance !== undefined) {
+      } else if (!hasIndependentSettlementEvidence) {
+        // Device HMAC proves that a registered device captured these bytes. It
+        // does not prove bank settlement. Keep the message and its arithmetic
+        // evidence available to the operator without advancing the ledger.
+        status = 'review_required';
+        reconciliationState = 'consistent';
+        reviewReason = 'Signed capture is not independent settlement evidence; operator verification is required.';
+      } else if (statedBalanceMinor !== undefined) {
         // Out-of-Order Permutation Engine (Section 12A Algorithm)
-        const inferredPriorBalance = Math.round((input.parsed.statedBalance - input.parsed.amount) * 100) / 100;
-        const currentBalanceRounded = Math.round(currentBalance * 100) / 100;
+        const inferredPriorMinor = statedBalanceMinor - amountMinor;
 
-        if (inferredPriorBalance === currentBalanceRounded || currentBalanceRounded === 0) {
-          // Continuous link in the chain or fresh new merchant anchor: Apply immediately!
+        if (inferredPriorMinor === currentMinor) {
+          // Continuous link in the chain from an explicit, trusted checkpoint.
           status = 'confirmed';
           reconciliationState = 'consistent';
-          balanceBefore = currentBalanceRounded === 0 ? inferredPriorBalance : currentBalance;
-          balanceAfter = input.parsed.statedBalance;
-
-          db.prepare(`
-            UPDATE balance_accounts 
-            SET current_balance = ?, version = version + 1, updated_at = datetime('now')
-            WHERE id = ?
-          `).run(balanceAfter, balanceAccountId);
+          balanceBeforeMinor = currentMinor;
+          balanceAfterMinor = statedBalanceMinor;
+          advanceLedger(balanceAfterMinor);
         } else {
-          // Out-of-Order: Inferred prior balance does NOT match current anchor.
+          // Out-of-Order: inferred prior balance does NOT match current anchor.
           // Place into pending_ordering without declaring fake or dropping!
           status = 'pending_ordering';
           reconciliationState = 'pending_ordering';
-          reviewReason = `Out-of-order arrival: prior balance ${inferredPriorBalance} does not match anchor ${currentBalanceRounded}`;
+          reviewReason = `Out-of-order arrival: prior balance ${fromMinor(inferredPriorMinor).toFixed(2)} does not match anchor ${fromMinor(currentMinor).toFixed(2)}`;
         }
       } else {
         // Standard credit without explicit post-balance string
-        balanceBefore = currentBalance;
-        balanceAfter = currentBalance + input.parsed.amount;
-
-        db.prepare(`
-          UPDATE balance_accounts 
-          SET current_balance = ?, version = version + 1, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(balanceAfter, balanceAccountId);
+        balanceBeforeMinor = currentMinor;
+        balanceAfterMinor = currentMinor + amountMinor;
+        advanceLedger(balanceAfterMinor);
       }
 
       // 5. Insert Reconciled Transaction
       const trxId = `tx_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-      const recordedStatedBalance = input.parsed.statedBalance !== undefined ? input.parsed.statedBalance : balanceAfter;
+      const recordedStatedMinor = statedBalanceMinor !== undefined ? statedBalanceMinor : balanceAfterMinor;
 
       db.prepare(`
         INSERT INTO transactions (
           id, organization_id, balance_account_id, payment_source_id, raw_event_id,
-          external_trx_id, provider, amount, currency, stated_balance_after,
+          external_trx_id, provider, amount_minor, currency, stated_balance_after_minor,
           sender_name, sender_phone, status, reconciliation_state, provenance_confidence,
           review_reason, signature, financial_event_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -215,9 +249,9 @@ export class ReconciliationService {
         input.rawEventId,
         input.parsed.externalTrxId,
         provider,
-        input.parsed.amount,
+        amountMinor,
         input.parsed.currency,
-        recordedStatedBalance,
+        recordedStatedMinor,
         input.parsed.senderName,
         input.parsed.senderPhone,
         status,
@@ -228,29 +262,30 @@ export class ReconciliationService {
         input.financialEventAt
       );
 
-      // 6. Cascade Resolution: Check if any pending_ordering transactions can now resolve!
-      if (status === 'confirmed') {
-        ReconciliationService.resolvePendingCascade(db, input.organizationId, balanceAccountId, balanceAfter);
-      }
+      markRawEvent(db, input.rawEventId, input.organizationId, status);
 
-      // 7. Enqueue Outbox Dispatch Jobs if Confirmed
+      // 6. Confirmed movements update the source limits inside the same
+      // database transaction. A crash cannot leave a ledger entry without its
+      // source usage or alert job.
       if (status === 'confirmed') {
-        db.prepare(`
-          INSERT INTO outbox_jobs (id, organization_id, job_type, payload)
-          VALUES (?, ?, 'dispatch_webhook', ?)
-        `).run(
-          `job_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        LimitEngine.recordTurnoverInTransaction(
           input.organizationId,
-          JSON.stringify({
-            event: 'transaction.confirmed',
-            transaction_id: trxId,
-            external_trx_id: input.parsed.externalTrxId,
-            amount: input.parsed.amount,
-            currency: input.parsed.currency,
-            provider,
-            financial_event_at: input.financialEventAt,
-          })
+          paymentSourceId,
+          amountMinor,
+          input.financialEventAt
         );
+
+        ReconciliationService.enqueueConfirmedWebhook(db, input.organizationId, {
+          id: trxId,
+          external_trx_id: input.parsed.externalTrxId,
+          amount_minor: amountMinor,
+          currency: input.parsed.currency,
+          provider,
+          financial_event_at: input.financialEventAt,
+        });
+
+        // Cascade Resolution: Check if any pending_ordering transactions can now resolve!
+        ReconciliationService.resolvePendingCascade(db, input.organizationId, balanceAccountId, balanceAfterMinor);
       }
 
       db.exec('COMMIT;');
@@ -260,8 +295,8 @@ export class ReconciliationService {
         externalTrxId: input.parsed.externalTrxId,
         status,
         reconciliationState,
-        balanceBefore,
-        balanceAfter,
+        balanceBefore: fromMinor(balanceBeforeMinor),
+        balanceAfter: fromMinor(balanceAfterMinor),
         isDuplicate: false,
         reviewReason,
       };
@@ -271,45 +306,86 @@ export class ReconciliationService {
     }
   }
 
+  /** Queues the transaction.confirmed webhook. Idempotent per transaction id. */
+  static enqueueConfirmedWebhook(
+    db: any,
+    organizationId: string,
+    trx: { id: string; external_trx_id: string; amount_minor: number; currency: string; provider: string; financial_event_at: string }
+  ): void {
+    db.prepare(`
+      INSERT OR IGNORE INTO outbox_jobs (id, organization_id, job_type, payload)
+      VALUES (?, ?, 'dispatch_webhook', ?)
+    `).run(
+      `job_tx_${trx.id}`,
+      organizationId,
+      JSON.stringify({
+        event: 'transaction.confirmed',
+        transaction_id: trx.id,
+        external_trx_id: trx.external_trx_id,
+        amount: fromMinor(trx.amount_minor),
+        amount_minor: trx.amount_minor,
+        currency: trx.currency,
+        provider: trx.provider,
+        financial_event_at: trx.financial_event_at,
+      })
+    );
+  }
+
   /**
    * Cascade re-evaluation: When ledger balance advances to B, check if any pending_ordering
-   * transactions were waiting for prior balance = B.
+   * transactions were waiting for prior balance = B. Returns the final balance in piastres.
    */
-  private static resolvePendingCascade(db: any, organizationId: string, balanceAccountId: string, currentBalance: number): void {
-    let activeBalance = currentBalance;
+  private static resolvePendingCascade(db: any, organizationId: string, balanceAccountId: string, currentMinor: number): number {
+    let activeMinor = currentMinor;
     let resolvedAny = true;
 
     while (resolvedAny) {
       resolvedAny = false;
       const pendingRows = db.prepare(`
-        SELECT id, amount, stated_balance_after, external_trx_id
+        SELECT id, raw_event_id, payment_source_id, amount_minor, currency, provider,
+               stated_balance_after_minor, external_trx_id, financial_event_at
         FROM transactions
         WHERE organization_id = ? AND balance_account_id = ? AND status = 'pending_ordering'
+        ORDER BY financial_event_at ASC, created_at ASC
       `).all(organizationId, balanceAccountId) as any[];
 
       for (const row of pendingRows) {
-        const requiredPrior = Math.round((row.stated_balance_after - row.amount) * 100) / 100;
-        const currentRounded = Math.round(activeBalance * 100) / 100;
+        const rowAmount = Number(row.amount_minor);
+        const rowStated = Number(row.stated_balance_after_minor);
+        if (rowStated - rowAmount !== activeMinor) continue;
 
-        if (requiredPrior === currentRounded) {
-          activeBalance = row.stated_balance_after;
+        activeMinor = rowStated;
 
-          db.prepare(`
-            UPDATE transactions
-            SET status = 'confirmed', reconciliation_state = 'consistent', review_reason = NULL
-            WHERE id = ?
-          `).run(row.id);
+        db.prepare(`
+          UPDATE transactions
+          SET status = 'confirmed', reconciliation_state = 'consistent', review_reason = NULL
+          WHERE id = ?
+        `).run(row.id);
 
-          db.prepare(`
-            UPDATE balance_accounts
-            SET current_balance = ?, version = version + 1, updated_at = datetime('now')
-            WHERE id = ?
-          `).run(activeBalance, balanceAccountId);
+        db.prepare(`
+          UPDATE balance_accounts
+          SET current_balance_minor = ?, version = version + 1, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(activeMinor, balanceAccountId);
 
-          resolvedAny = true;
-          break; // restart scan with new balance
+        LimitEngine.recordTurnoverInTransaction(
+          organizationId,
+          row.payment_source_id,
+          rowAmount,
+          row.financial_event_at
+        );
+
+        if (row.raw_event_id) {
+          markRawEvent(db, row.raw_event_id, organizationId, 'confirmed');
         }
+
+        ReconciliationService.enqueueConfirmedWebhook(db, organizationId, { ...row, amount_minor: rowAmount });
+
+        resolvedAny = true;
+        break; // restart scan with new balance
       }
     }
+
+    return activeMinor;
   }
 }

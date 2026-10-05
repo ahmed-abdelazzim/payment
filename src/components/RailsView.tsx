@@ -4,6 +4,7 @@ import { ProviderRail } from '../types';
 interface RailsViewProps {
   rails: ProviderRail[];
   onUpdateRails: (updated: ProviderRail[]) => void;
+  onTogglePause?: (railId: string) => void | Promise<void>;
   onOpenAddSource?: () => void;
   language: 'en' | 'ar';
 }
@@ -11,13 +12,21 @@ interface RailsViewProps {
 export const RailsView: React.FC<RailsViewProps> = ({
   rails,
   onUpdateRails,
+  onTogglePause,
   onOpenAddSource,
   language,
 }) => {
   const [activeTab, setActiveTab] = useState<'limits' | 'sources'>('limits');
   const [selectedRail, setSelectedRail] = useState<ProviderRail | null>(null);
 
-  const handleTogglePause = (railId: string) => {
+  const handleTogglePause = async (railId: string) => {
+    if (onTogglePause) {
+      await onTogglePause(railId);
+      return;
+    }
+
+    // This fallback only keeps the component usable in isolated previews. The
+    // application provides onTogglePause so a real source state comes from the API.
     const updated = rails.map((r) =>
       r.id === railId ? { ...r, isPaused: !r.isPaused } : r
     );
@@ -123,7 +132,16 @@ export const RailsView: React.FC<RailsViewProps> = ({
           </div>
         ) : (
           rails.map((rail) => {
-          const dailyPercent = Math.round((rail.volume / rail.dailyLimit) * 100);
+          const hasDailyUsage = typeof rail.dailyIntake === 'number';
+          const hasMonthlyUsage = typeof rail.monthlyIntake === 'number';
+          const dailyIntake = rail.dailyIntake ?? 0;
+          const monthlyIntake = rail.monthlyIntake ?? 0;
+          const dailyPercent = rail.dailyPercentage ?? (hasDailyUsage && rail.dailyLimit > 0
+            ? Math.round((dailyIntake / rail.dailyLimit) * 100)
+            : 0);
+          const monthlyPercent = rail.monthlyPercentage ?? (hasMonthlyUsage && rail.monthlyLimit > 0
+            ? Math.round((monthlyIntake / rail.monthlyLimit) * 100)
+            : 0);
           const isNearLimit = dailyPercent >= 80;
 
           return (
@@ -175,7 +193,9 @@ export const RailsView: React.FC<RailsViewProps> = ({
                     {language === 'ar' ? 'الاستهلاك اليومي:' : 'Daily Capacity Usage:'}
                   </span>
                   <span className="font-code-num font-semibold text-on-surface">
-                    {rail.volume.toLocaleString('en-US')} / {rail.dailyLimit.toLocaleString('en-US')} EGP ({dailyPercent}%)
+                    {hasDailyUsage
+                      ? `${dailyIntake.toLocaleString('en-US')} / ${rail.dailyLimit.toLocaleString('en-US')} EGP (${dailyPercent}%)`
+                      : language === 'ar' ? 'لا توجد حركة مؤكدة لليوم بعد' : 'No verified daily activity yet'}
                   </span>
                 </div>
 
@@ -193,10 +213,12 @@ export const RailsView: React.FC<RailsViewProps> = ({
               <div className="mt-space-sm space-y-1">
                 <div className="flex justify-between text-label-sm">
                   <span className="text-on-surface-variant">
-                    {language === 'ar' ? 'السقف الشهري المقدر:' : 'Estimated Monthly Turnover:'}
+                    {language === 'ar' ? 'استهلاك الشهر:' : 'Monthly Capacity Usage:'}
                   </span>
                   <span className="font-code-num text-on-surface-variant">
-                    {(rail.volume * 2.8).toLocaleString('en-US', { maximumFractionDigits: 0 })} / {rail.monthlyLimit.toLocaleString('en-US')} EGP
+                    {hasMonthlyUsage
+                      ? `${monthlyIntake.toLocaleString('en-US')} / ${rail.monthlyLimit.toLocaleString('en-US')} EGP (${monthlyPercent}%)`
+                      : language === 'ar' ? 'لا توجد حركة مؤكدة للشهر بعد' : 'No verified monthly activity yet'}
                   </span>
                 </div>
               </div>
@@ -209,7 +231,7 @@ export const RailsView: React.FC<RailsViewProps> = ({
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleTogglePause(rail.id)}
+                    onClick={() => void handleTogglePause(rail.id)}
                     className={`px-3 py-1 rounded text-label-sm font-semibold active:scale-95 transition-all ${
                       rail.isPaused
                         ? 'bg-primary text-on-primary'
@@ -279,7 +301,9 @@ export const RailsView: React.FC<RailsViewProps> = ({
               </div>
 
               <div className="p-space-sm bg-surface-container-low rounded border border-outline-variant text-label-sm text-on-surface-variant">
-                Alerts are delivered via Telegram (#cairo-vault-bot) and Webhook endpoint (\`/api/v1/ledger/alerts\`).
+                {language === 'ar'
+                  ? 'التنبيهات ستصل إلى التكاملات التي تم إعدادها لمساحة العمل. راجع حالة الإرسال قبل الاعتماد عليها تشغيليًا.'
+                  : 'Alerts are delivered through the integrations configured for this workspace. Review delivery status before relying on them operationally.'}
               </div>
             </div>
 

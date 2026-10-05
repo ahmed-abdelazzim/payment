@@ -1,7 +1,9 @@
 # Engineering Constitution for Sarraf Ops
 
+> **حالة التنفيذ:** هذا دستور إلزامي، وليس وصفًا تلقائيًا لما هو متاح في كل بيئة. التنفيذ المحلي الحالي يستعمل SQLite مع عزل في الخدمات وقيود علاقات داخلية؛ لا يوفّر RLS. لا يجوز وصفه كقاعدة SaaS متعددة النسخ قبل نقل الإنتاج إلى PostgreSQL مُدار وتشغيل ترحيلات RLS. راجع `docs/PRODUCT_CONTRACT.md` للحقائق والحدود الحالية.
+
 ## Invariant 1: Multi-Tenant Data Isolation
-Every query, mutation, and cache key MUST include the tenant context (`organization_id`). No endpoint may accept an `organization_id` directly from an untrusted client payload; it must be derived from authenticated session tokens or device API credentials. At the database layer, PostgreSQL Row-Level Security (RLS) policies must enforce isolation unconditionally.
+Every query, mutation, and cache key MUST include the tenant context (`organization_id`). No endpoint may accept an `organization_id` directly from an untrusted client payload; it must be derived from authenticated session tokens or device API credentials. SQLite deployments must enforce matching organization relationships through database constraints and scoped queries. PostgreSQL Row-Level Security (RLS) must enforce isolation unconditionally before a multi-instance production deployment.
 
 ## Invariant 2: Decimal & Minor-Unit Financial Arithmetic
 Never use floating-point types (IEEE 754 float/double) for monetary amounts. All amounts must be stored as `NUMERIC(14, 2)` or integer minor units (piastres / cents). All balance calculations must use exact decimal arithmetic.

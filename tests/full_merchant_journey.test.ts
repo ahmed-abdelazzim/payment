@@ -45,13 +45,13 @@ test('Full Merchant Journey 1: Clean Registration, Scrypt Security & Email Verif
   `).run(orgId, userId);
 
   db.prepare(`
-    INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance)
-    VALUES (?, ?, 'Main Operational Account (EGP)', 'EGP', 0.0)
+    INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance_minor)
+    VALUES (?, ?, 'Main Operational Account (EGP)', 'EGP', 0)
   `).run(`acc_${orgId}`, orgId);
 
   // 3. Verify clean slate: 0 mock devices, 0 mock transactions, 0 initial balance
-  const balanceRow = db.prepare('SELECT current_balance FROM balance_accounts WHERE organization_id = ?').get(orgId) as any;
-  assert.strictEqual(balanceRow.current_balance, 0.0);
+  const balanceRow = db.prepare('SELECT current_balance_minor FROM balance_accounts WHERE organization_id = ?').get(orgId) as any;
+  assert.strictEqual(balanceRow.current_balance_minor, 0);
 
   const devicesCount = (db.prepare('SELECT COUNT(*) as c FROM devices WHERE organization_id = ?').get(orgId) as any).c;
   assert.strictEqual(devicesCount, 0, 'New merchant must have 0 mock devices');
@@ -82,13 +82,13 @@ test('Full Merchant Journey 2: Add Receiving Payment Source with Distinct Commer
   const balanceAccId = 'acc_sources_1';
 
   db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Sources Test Org', 'تيست', 'sources-test')`).run(orgId);
-  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance) VALUES (?, ?, 'Ops Balance', 0.0)`).run(balanceAccId, orgId);
+  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor) VALUES (?, ?, 'Ops Balance', 0)`).run(balanceAccId, orgId);
 
   // Add Vodafone Cash Source
   const vfSourceId = 'src_vf_real';
   db.prepare(`
-    INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit)
-    VALUES (?, ?, ?, 'vodafone_cash', 'Main Vodafone Cash Line', '01099887766', 60000.0, 200000.0)
+    INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor)
+    VALUES (?, ?, ?, 'vodafone_cash', 'Main Vodafone Cash Line', '01099887766', 6000000, 20000000)
   `).run(vfSourceId, orgId, balanceAccId);
 
   db.prepare(`
@@ -98,10 +98,10 @@ test('Full Merchant Journey 2: Add Receiving Payment Source with Distinct Commer
 
   // Add Commercial InstaPay Source (with merchant approved limit, NOT personal 120k cap)
   const ipnSourceId = 'src_ipn_real';
-  const commercialDailyCap = 500000.0; // 500,000 EGP Commercial receiving tier
+  const commercialDailyCap = 50000000; // 500,000.00 EGP Commercial receiving tier, in piastres
   db.prepare(`
-    INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit)
-    VALUES (?, ?, ?, 'instapay', 'Nile Trade Corporate IPN', 'niletrade@instapay', ?, 2000000.0)
+    INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor)
+    VALUES (?, ?, ?, 'instapay', 'Nile Trade Corporate IPN', 'niletrade@instapay', ?, 200000000)
   `).run(ipnSourceId, orgId, balanceAccId, commercialDailyCap);
 
   db.prepare(`
@@ -109,10 +109,10 @@ test('Full Merchant Journey 2: Add Receiving Payment Source with Distinct Commer
     VALUES ('addr_ipn_1', ?, 'instapay_vpa', 'niletrade@instapay', 0)
   `).run(ipnSourceId);
 
-  const sources = db.prepare('SELECT id, provider, daily_turnover_limit FROM payment_sources WHERE organization_id = ?').all(orgId) as any[];
+  const sources = db.prepare('SELECT id, provider, daily_turnover_limit_minor FROM payment_sources WHERE organization_id = ?').all(orgId) as any[];
   assert.strictEqual(sources.length, 2);
   const ipnSource = sources.find(s => s.provider === 'instapay');
-  assert.strictEqual(ipnSource.daily_turnover_limit, 500000.0, 'InstaPay merchant receiving limit must reflect commercial setting');
+  assert.strictEqual(ipnSource.daily_turnover_limit_minor, 50000000, 'InstaPay merchant receiving limit must reflect commercial setting');
 });
 
 test('Full Merchant Journey 3 & 4: Register Device, Handshake & Proof of Telemetry Permissions', () => {
@@ -178,10 +178,14 @@ test('Full Merchant Journey 5: Real Inbound Event via HMAC-SHA256, Parsing, Reco
   const srcId = 'src_vf_main';
 
   db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Payment Journey Org', 'دفع', 'pay-journey')`).run(orgId);
-  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance, version) VALUES (?, ?, 'Main EGP', 1000.0, 1)`).run(balanceAccId, orgId);
-  db.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit) VALUES (?, ?, ?, 'vodafone_cash', 'Main Line', ?, 60000, 200000)`).run(srcId, orgId, balanceAccId, phone);
+  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor, version) VALUES (?, ?, 'Main EGP', 100000, 1)`).run(balanceAccId, orgId);
+  db.prepare(`
+    INSERT INTO balance_checkpoints (id, balance_account_id, checkpoint_type, balance_amount_minor, as_of_timestamp, audit_notes)
+    VALUES ('checkpoint_payment_main', ?, 'OPERATOR_PROVISIONAL', 100000, datetime('now'), 'Test opening checkpoint')
+  `).run(balanceAccId);
+  db.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor) VALUES (?, ?, ?, 'vodafone_cash', 'Main Line', ?, 6000000, 20000000)`).run(srcId, orgId, balanceAccId, phone);
   db.prepare(`INSERT INTO payment_addresses (id, payment_source_id, address_type, address_value) VALUES (?, ?, 'msisdn', ?)`).run(`addr_${srcId}`, srcId, phone);
-  db.prepare(`INSERT INTO devices (id, organization_id, device_number, friendly_name, adapter_type, status) VALUES (?, ?, 'DEV-01', 'Counter POS', 'macrodroid', 'online')`).run(devId, orgId);
+  db.prepare(`INSERT INTO devices (id, organization_id, payment_source_id, device_number, friendly_name, adapter_type, status) VALUES (?, ?, ?, 'DEV-01', 'Counter POS', 'macrodroid', 'online')`).run(devId, orgId, srcId);
   db.prepare(`INSERT INTO device_credentials (device_id, hmac_secret) VALUES (?, ?)`).run(devId, hmacSecret);
 
   // Inbound Real Vodafone Cash SMS
@@ -226,31 +230,45 @@ test('Full Merchant Journey 5: Real Inbound Event via HMAC-SHA256, Parsing, Reco
     signature,
   });
 
-  assert.strictEqual(result.status, 'confirmed');
+  // HMAC proves the registered device captured these bytes; it is not
+  // independent settlement evidence. The event must wait for review.
+  assert.strictEqual(result.status, 'review_required');
   assert.strictEqual(result.externalTrxId, '982173456');
 
-  // 5. Verify Ledger Balance Updated
-  const updatedBalance = db.prepare('SELECT current_balance FROM balance_accounts WHERE id = ?').get(balanceAccId) as any;
-  assert.strictEqual(updatedBalance.current_balance, 2250.0);
+  // 5. Ledger must NOT advance before independent verification
+  const updatedBalance = db.prepare('SELECT current_balance_minor FROM balance_accounts WHERE id = ?').get(balanceAccId) as any;
+  assert.strictEqual(updatedBalance.current_balance_minor, 100000);
 
-  // 6. Verify Transaction Recorded for Client Dashboard
+  // 6. Transaction is recorded and visible to the operator as awaiting review
   const clientTx = db.prepare('SELECT * FROM transactions WHERE organization_id = ? AND external_trx_id = ?').get(orgId, '982173456') as any;
   assert.ok(clientTx);
-  assert.strictEqual(clientTx.amount, 1250.0);
-  assert.strictEqual(clientTx.status, 'confirmed');
+  assert.strictEqual(clientTx.amount_minor, 125000);
+  assert.strictEqual(clientTx.status, 'review_required');
+  assert.strictEqual(clientTx.payment_source_id, srcId);
 
-  // 7. Verify Outbox Job created for Webhook/Telegram Dispatch
-  const outboxJob = db.prepare('SELECT * FROM outbox_jobs WHERE organization_id = ?').get(orgId) as any;
-  assert.ok(outboxJob);
-  assert.strictEqual(outboxJob.job_type, 'dispatch_webhook');
-  const payload = JSON.parse(outboxJob.payload);
-  assert.strictEqual(payload.event, 'transaction.confirmed');
-  assert.strictEqual(payload.external_trx_id, '982173456');
-  assert.strictEqual(payload.amount, 1250.0);
+  // 7. No transaction.confirmed delivery may be queued before verification
+  const outboxCount = db.prepare("SELECT COUNT(*) as c FROM outbox_jobs WHERE organization_id = ? AND job_type = 'dispatch_webhook'").get(orgId) as any;
+  assert.strictEqual(outboxCount.c, 0);
+
+  // 8. Re-submitting the same reference is idempotent and creates no second movement
+  const replay = ReconciliationService.processInboundTransaction({
+    organizationId: orgId,
+    deviceId: devId,
+    rawEventId: 'raw_evt_test_01_replay',
+    adapterType: 'macrodroid',
+    boundPaymentAddress: phone,
+    parsed,
+    financialEventAt: new Date().toISOString(),
+    signature,
+  });
+  assert.strictEqual(replay.isDuplicate, true);
+  const txCount = db.prepare('SELECT COUNT(*) as c FROM transactions WHERE organization_id = ?').get(orgId) as any;
+  assert.strictEqual(txCount.c, 1);
 });
 
 test('Full Merchant Journey 6: Data Persistence Across Service Restarts', () => {
-  const tempDbPath = path.join('/tmp', `sarraf_persist_test_${Date.now()}.db`);
+  const tempDir = fs.mkdtempSync(path.join(process.cwd(), 'data', 'sarraf-persist-'));
+  const tempDbPath = path.join(tempDir, 'database.db');
 
   try {
     // Reset global db instance so getDatabase opens the disk file
@@ -263,12 +281,12 @@ test('Full Merchant Journey 6: Data Persistence Across Service Restarts', () => 
     const srcId = 'src_persisted_vf';
 
     db1.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Persistent Org', 'ثابت', 'persist-org')`).run(orgId);
-    db1.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance) VALUES (?, ?, 'Main EGP', 5000)`).run(accId, orgId);
-    db1.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit) VALUES (?, ?, ?, 'vodafone_cash', 'VF', '01019283921', 60000, 200000)`).run(srcId, orgId, accId);
+    db1.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor) VALUES (?, ?, 'Main EGP', 500000)`).run(accId, orgId);
+    db1.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor) VALUES (?, ?, ?, 'vodafone_cash', 'VF', '01019283921', 6000000, 20000000)`).run(srcId, orgId, accId);
     db1.prepare(`INSERT INTO users (id, email, password_hash, full_name, email_verified, is_active) VALUES (?, 'owner@persist.eg', 'scrypt_hash', 'Persist Owner', 1, 1)`).run(userId);
     db1.prepare(`INSERT INTO organization_members (id, organization_id, user_id, role) VALUES ('mem_p1', ?, ?, 'owner')`).run(orgId, userId);
     db1.prepare(`INSERT INTO devices (id, organization_id, device_number, friendly_name, adapter_type, status, battery_level) VALUES (?, ?, 'DEV-PERSIST', 'Terminal', 'macrodroid', 'online', 91)`).run(devId, orgId);
-    db1.prepare(`INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, amount, currency, provider, status, reconciliation_state, provenance_confidence, financial_event_at) VALUES ('tx_persisted_01', ?, ?, ?, 'TRX-PERSIST-999', 3450.0, 'EGP', 'instapay', 'confirmed', 'consistent', 1.0, datetime('now'))`).run(orgId, accId, srcId);
+    db1.prepare(`INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, amount_minor, currency, provider, status, reconciliation_state, provenance_confidence, financial_event_at) VALUES ('tx_persisted_01', ?, ?, ?, 'TRX-PERSIST-999', 345000, 'EGP', 'instapay', 'confirmed', 'consistent', 1.0, datetime('now'))`).run(orgId, accId, srcId);
 
     // Close db connection to simulate process shutdown
     db1.close();
@@ -290,9 +308,9 @@ test('Full Merchant Journey 6: Data Persistence Across Service Restarts', () => 
     assert.ok(device);
     assert.strictEqual(device.battery_level, 91);
 
-    const transaction = db2.prepare('SELECT external_trx_id, amount, status FROM transactions WHERE id = ?').get('tx_persisted_01') as any;
+    const transaction = db2.prepare('SELECT external_trx_id, amount_minor, status FROM transactions WHERE id = ?').get('tx_persisted_01') as any;
     assert.ok(transaction);
-    assert.strictEqual(transaction.amount, 3450.0);
+    assert.strictEqual(transaction.amount_minor, 345000);
     assert.strictEqual(transaction.status, 'confirmed');
 
     db2.close();
@@ -301,6 +319,7 @@ test('Full Merchant Journey 6: Data Persistence Across Service Restarts', () => 
       if (fs.existsSync(tempDbPath)) fs.unlinkSync(tempDbPath);
       if (fs.existsSync(`${tempDbPath}-wal`)) fs.unlinkSync(`${tempDbPath}-wal`);
       if (fs.existsSync(`${tempDbPath}-shm`)) fs.unlinkSync(`${tempDbPath}-shm`);
+      if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
     } catch {}
   }
 });
@@ -316,16 +335,16 @@ test('Full Merchant Journey 7: Two-Tenant Complete Cryptographic and Data Isolat
   db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Tenant B Ltd', 'شركة ب', 'tenant-b')`).run(orgB);
 
   // Tenant A items
-  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance) VALUES ('acc_A', ?, 'Acc A', 15000)`).run(orgA);
-  db.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit) VALUES ('src_A', ?, 'acc_A', 'vodafone_cash', 'Line A', '01011111111', 60000, 200000)`).run(orgA);
+  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor) VALUES ('acc_A', ?, 'Acc A', 1500000)`).run(orgA);
+  db.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor) VALUES ('src_A', ?, 'acc_A', 'vodafone_cash', 'Line A', '01011111111', 6000000, 20000000)`).run(orgA);
   db.prepare(`INSERT INTO devices (id, organization_id, device_number, friendly_name, adapter_type) VALUES ('dev_A', ?, 'Dev A', 'Phone A', 'macrodroid')`).run(orgA);
-  db.prepare(`INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, amount, currency, provider, status, reconciliation_state, provenance_confidence, financial_event_at) VALUES ('tx_A', ?, 'acc_A', 'src_A', 'TRX-A-100', 800.0, 'EGP', 'vodafone_cash', 'confirmed', 'consistent', 1.0, datetime('now'))`).run(orgA);
+  db.prepare(`INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, amount_minor, currency, provider, status, reconciliation_state, provenance_confidence, financial_event_at) VALUES ('tx_A', ?, 'acc_A', 'src_A', 'TRX-A-100', 80000, 'EGP', 'vodafone_cash', 'confirmed', 'consistent', 1.0, datetime('now'))`).run(orgA);
 
   // Tenant B items
-  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance) VALUES ('acc_B', ?, 'Acc B', 42000)`).run(orgB);
-  db.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit) VALUES ('src_B', ?, 'acc_B', 'instapay', 'Line B', 'b@instapay', 100000, 500000)`).run(orgB);
+  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor) VALUES ('acc_B', ?, 'Acc B', 4200000)`).run(orgB);
+  db.prepare(`INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor) VALUES ('src_B', ?, 'acc_B', 'instapay', 'Line B', 'b@instapay', 10000000, 50000000)`).run(orgB);
   db.prepare(`INSERT INTO devices (id, organization_id, device_number, friendly_name, adapter_type) VALUES ('dev_B', ?, 'Dev B', 'Phone B', 'native_agent')`).run(orgB);
-  db.prepare(`INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, amount, currency, provider, status, reconciliation_state, provenance_confidence, financial_event_at) VALUES ('tx_B', ?, 'acc_B', 'src_B', 'TRX-B-200', 9500.0, 'EGP', 'instapay', 'confirmed', 'consistent', 1.0, datetime('now'))`).run(orgB);
+  db.prepare(`INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, amount_minor, currency, provider, status, reconciliation_state, provenance_confidence, financial_event_at) VALUES ('tx_B', ?, 'acc_B', 'src_B', 'TRX-B-200', 950000, 'EGP', 'instapay', 'confirmed', 'consistent', 1.0, datetime('now'))`).run(orgB);
 
   // Tenant A queries MUST NEVER return Tenant B's data
   const accountsA = db.prepare('SELECT * FROM balance_accounts WHERE organization_id = ?').all(orgA);

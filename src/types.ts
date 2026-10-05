@@ -52,7 +52,9 @@ export interface Device {
 }
 
 export interface ProviderRail {
-  id: ProviderType;
+  /** Persistent payment_sources.id. A workspace may have more than one source per provider. */
+  id: string;
+  provider: ProviderType;
   name: string;
   sharePercentage: number;
   volume: number;
@@ -62,6 +64,11 @@ export interface ProviderRail {
   walletNumber: string;
   dailyLimit: number;
   monthlyLimit: number;
+  /** Usage comes from the verified source-specific Cairo-period counter. */
+  dailyIntake?: number;
+  monthlyIntake?: number;
+  dailyPercentage?: number;
+  monthlyPercentage?: number;
   isPaused?: boolean;
 }
 

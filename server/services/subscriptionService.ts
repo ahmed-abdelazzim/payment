@@ -2,12 +2,66 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { getDatabase } from '../db';
 import { AuditService } from './auditService';
+import { fromMinor } from '../money';
+
+/** SQL fragment exposing an order/plan price as EGP for API consumers only. */
+const PRICE_EGP_COLUMN = 'price_minor / 100.0 AS price_egp';
+
+/**
+ * Product terms are kept here so the server never creates an order from a
+ * modified database row with a different price or device entitlement.
+ */
+export const OFFICIAL_SUBSCRIPTION_PLANS = {
+  plan_monthly_3: {
+    billingCycle: 'monthly',
+    priceMinor: 49900,
+    priceEgp: 499,
+    deviceLimit: 3,
+  },
+  plan_monthly_5: {
+    billingCycle: 'monthly',
+    priceMinor: 79900,
+    priceEgp: 799,
+    deviceLimit: 5,
+  },
+  plan_annual_10: {
+    billingCycle: 'annual',
+    priceMinor: 799000,
+    priceEgp: 7990,
+    deviceLimit: 10,
+  },
+} as const;
+
+export const FREE_TRIAL_PLAN_ID = 'plan_trial_7d';
+export const FREE_TRIAL_DURATION_HOURS = 7 * 24;
+export const FREE_TRIAL_DEVICE_LIMIT = 1;
+
+type OfficialPlanId = keyof typeof OFFICIAL_SUBSCRIPTION_PLANS;
+
+function sameMinor(left: unknown, right: unknown): boolean {
+  const l = Number(left);
+  const r = Number(right);
+  return Number.isSafeInteger(l) && Number.isSafeInteger(r) && l === r;
+}
+
+function normalizeTransferReference(value?: string | null): string | null {
+  const normalized = value?.trim().toLocaleLowerCase('en-US');
+  return normalized || null;
+}
+
+function getOfficialPlan(planId: string): (typeof OFFICIAL_SUBSCRIPTION_PLANS)[OfficialPlanId] | null {
+  return Object.prototype.hasOwnProperty.call(OFFICIAL_SUBSCRIPTION_PLANS, planId)
+    ? OFFICIAL_SUBSCRIPTION_PLANS[planId as OfficialPlanId]
+    : null;
+}
 
 export interface SubscriptionPlan {
   id: string;
   name_en: string;
   name_ar: string;
   billing_cycle: 'monthly' | 'annual';
+  price_minor: number;
+  /** Derived for API consumers; never use for arithmetic. */
   price_egp: number;
   device_limit: number;
   features_json: string;
@@ -25,6 +79,8 @@ export interface SubscriptionOrder {
   plan_name_en: string;
   plan_name_ar: string;
   billing_cycle: 'monthly' | 'annual';
+  price_minor: number;
+  /** Derived for API consumers; never use for arithmetic. */
   price_egp: number;
   currency: string;
   device_limit: number;
@@ -84,24 +140,68 @@ export class SubscriptionService {
     return end.toISOString();
   }
 
+  private static assertOfficialPlanTerms(plan: SubscriptionPlan): void {
+    const expected = getOfficialPlan(plan.id);
+    if (!expected) {
+      throw new Error('INVALID_PLAN');
+    }
+
+    if (
+      plan.billing_cycle !== expected.billingCycle ||
+      !sameMinor(plan.price_minor, expected.priceMinor) ||
+      Number(plan.device_limit) !== expected.deviceLimit
+    ) {
+      throw new Error(`PLAN_TERMS_MISMATCH_${plan.id}`);
+    }
+  }
+
   /**
    * Retrieves active subscription plans.
    */
   static getPlans(): SubscriptionPlan[] {
     const db = getDatabase();
-    return db.prepare('SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY price_egp ASC').all() as unknown as SubscriptionPlan[];
+    const plans = db.prepare(`
+      SELECT *, ${PRICE_EGP_COLUMN} FROM subscription_plans
+      WHERE id IN ('plan_monthly_3', 'plan_monthly_5', 'plan_annual_10')
+        AND is_active = 1
+      ORDER BY CASE id
+        WHEN 'plan_monthly_3' THEN 1
+        WHEN 'plan_monthly_5' THEN 2
+        WHEN 'plan_annual_10' THEN 3
+      END
+    `).all() as unknown as SubscriptionPlan[];
+
+    if (plans.length !== Object.keys(OFFICIAL_SUBSCRIPTION_PLANS).length) {
+      throw new Error('OFFICIAL_PLAN_CONFIGURATION_INCOMPLETE');
+    }
+
+    for (const plan of plans) {
+      this.assertOfficialPlanTerms(plan);
+    }
+
+    return plans;
   }
 
   /**
    * Retrieves current platform payment settings (InstaPay number and beneficiary name).
    */
-  static getPlatformSettings(): { instapay_number: string; beneficiary_name: string; platform_org_id: string } {
+  static getPlatformSettings(): {
+    instapay_number: string;
+    beneficiary_name: string;
+    platform_org_id: string;
+    platform_source_id: string;
+  } {
     const db = getDatabase();
-    const row = db.prepare('SELECT instapay_number, beneficiary_name, platform_org_id FROM platform_settings WHERE id = ?').get('current') as any;
+    const row = db.prepare(`
+      SELECT instapay_number, beneficiary_name, platform_org_id, platform_source_id
+      FROM platform_settings
+      WHERE id = ?
+    `).get('current') as any;
     return {
       instapay_number: row?.instapay_number || '01551234263',
       beneficiary_name: row?.beneficiary_name || 'عبدالرحمن عبده',
       platform_org_id: row?.platform_org_id || 'org_platform_ops',
+      platform_source_id: row?.platform_source_id || 'src_platform_instapay',
     };
   }
 
@@ -114,10 +214,15 @@ export class SubscriptionService {
     planId: string;
   }): SubscriptionOrder {
     const db = getDatabase();
-    const plan = db.prepare('SELECT * FROM subscription_plans WHERE id = ? AND is_active = 1').get(params.planId) as unknown as SubscriptionPlan;
+    if (!getOfficialPlan(params.planId)) {
+      throw new Error('INVALID_PLAN');
+    }
+
+    const plan = db.prepare(`SELECT *, ${PRICE_EGP_COLUMN} FROM subscription_plans WHERE id = ? AND is_active = 1`).get(params.planId) as unknown as SubscriptionPlan;
     if (!plan) {
       throw new Error('INVALID_PLAN');
     }
+    this.assertOfficialPlanTerms(plan);
 
     const settings = this.getPlatformSettings();
     const orderId = `sub_ord_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
@@ -128,7 +233,7 @@ export class SubscriptionService {
     db.prepare(`
       INSERT INTO subscription_orders (
         id, order_number, organization_id, user_id, plan_id,
-        plan_name_en, plan_name_ar, billing_cycle, price_egp, currency,
+        plan_name_en, plan_name_ar, billing_cycle, price_minor, currency,
         device_limit, features_json, instapay_target_number, status,
         expires_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'EGP', ?, ?, ?, 'pending_payment', ?)
@@ -141,7 +246,7 @@ export class SubscriptionService {
       plan.name_en,
       plan.name_ar,
       plan.billing_cycle,
-      plan.price_egp,
+      plan.price_minor,
       plan.device_limit,
       plan.features_json,
       settings.instapay_number,
@@ -154,10 +259,18 @@ export class SubscriptionService {
       action: 'SUBSCRIPTION_ORDER_CREATED',
       resourceType: 'subscription_order',
       resourceId: orderId,
-      details: { orderNumber, planId: plan.id, priceEgp: plan.price_egp, instapayNumber: settings.instapay_number },
+      details: { orderNumber, planId: plan.id, priceMinor: plan.price_minor, priceEgp: fromMinor(plan.price_minor), instapayNumber: settings.instapay_number },
     });
 
-    return db.prepare('SELECT * FROM subscription_orders WHERE id = ?').get(orderId) as unknown as SubscriptionOrder;
+    return this.getOrderById(orderId)!;
+  }
+
+  /** Reads one order with its derived EGP price. */
+  static getOrderById(orderId: string, organizationId?: string): SubscriptionOrder | undefined {
+    const db = getDatabase();
+    return (organizationId
+      ? db.prepare(`SELECT *, ${PRICE_EGP_COLUMN} FROM subscription_orders WHERE id = ? AND organization_id = ?`).get(orderId, organizationId)
+      : db.prepare(`SELECT *, ${PRICE_EGP_COLUMN} FROM subscription_orders WHERE id = ?`).get(orderId)) as unknown as SubscriptionOrder | undefined;
   }
 
   /**
@@ -172,10 +285,7 @@ export class SubscriptionService {
     reportedNotes?: string;
   }): { order: SubscriptionOrder; matched: boolean } {
     const db = getDatabase();
-    const order = db.prepare('SELECT * FROM subscription_orders WHERE id = ? AND organization_id = ?').get(
-      params.orderId,
-      params.organizationId
-    ) as unknown as SubscriptionOrder;
+    const order = this.getOrderById(params.orderId, params.organizationId) as SubscriptionOrder;
 
     if (!order) {
       throw new Error('ORDER_NOT_FOUND');
@@ -185,27 +295,47 @@ export class SubscriptionService {
       return { order, matched: true };
     }
 
+    if (order.status === 'rejected') {
+      throw new Error('ORDER_REJECTED');
+    }
+
     const ref = params.reportedTransferRef?.trim() || null;
     const sender = params.reportedSenderInfo?.trim() || null;
     const time = params.reportedTransferTime?.trim() || new Date().toISOString();
     const notes = params.reportedNotes?.trim() || null;
+    const orderHasExpired = new Date(order.expires_at).getTime() <= Date.now();
+
+    // A merchant claim is never enough to activate a subscription. Expired
+    // orders must also be inspected by a platform operator, even if a later
+    // transfer looks similar to the original amount.
+    const nextStatus = order.status === 'expired' || orderHasExpired ? 'in_review' : 'payment_reported';
+    const reviewNote = order.status === 'expired' || orderHasExpired
+      ? 'Payment was reported after the order expiry window and requires platform-owner review.'
+      : null;
 
     db.prepare(`
       UPDATE subscription_orders
-      SET status = 'payment_reported',
+      SET status = ?,
           reported_transfer_ref = ?,
           reported_sender_info = ?,
           reported_transfer_time = ?,
           reported_notes = ?,
+          review_notes = COALESCE(?, review_notes),
           reported_at = datetime('now'),
           updated_at = datetime('now')
       WHERE id = ?
-    `).run(ref, sender, time, notes, params.orderId);
+    `).run(nextStatus, ref, sender, time, notes, reviewNote, params.orderId);
 
-    // Attempt automatic matching with real platform inbound transactions
+    if (nextStatus === 'in_review') {
+      const updatedOrder = this.getOrderById(params.orderId) as SubscriptionOrder;
+      return { order: updatedOrder, matched: false };
+    }
+
+    // Automatic activation is allowed only when the platform has a separate,
+    // trusted inbound record with the exact same unique transfer reference.
     const matchResult = this.attemptMatchOrder(params.orderId);
 
-    const updatedOrder = db.prepare('SELECT * FROM subscription_orders WHERE id = ?').get(params.orderId) as unknown as SubscriptionOrder;
+    const updatedOrder = this.getOrderById(params.orderId) as SubscriptionOrder;
     return { order: updatedOrder, matched: matchResult.matched };
   }
 
@@ -214,67 +344,53 @@ export class SubscriptionService {
    */
   static attemptMatchOrder(orderId: string): { matched: boolean; transactionId?: string } {
     const db = getDatabase();
-    const order = db.prepare('SELECT * FROM subscription_orders WHERE id = ?').get(orderId) as unknown as SubscriptionOrder;
-    if (!order || order.status === 'confirmed') {
+    const order = this.getOrderById(orderId) as SubscriptionOrder;
+    if (!order || order.status !== 'payment_reported') {
       return { matched: false };
     }
 
-    // Find candidate transactions in the platform owner's tenant (org_platform_ops)
-    // Constraint: Exactly matching amount, confirmed status, and never previously assigned to an order
+    const reference = normalizeTransferReference(order.reported_transfer_ref);
+    if (!reference) {
+      this.markOrderForReview(orderId, 'A unique platform transfer reference is required before automatic subscription activation.');
+      return { matched: false };
+    }
+
+    const settings = this.getPlatformSettings();
+
+    // A matching amount, sender name, or phone is only supporting evidence. The
+    // platform must have one independently captured, signed transaction on its
+    // own registered receiving source with the exact transfer reference.
     const candidates = db.prepare(`
-      SELECT t.id, t.external_trx_id, t.amount, t.sender_name, t.sender_phone, t.financial_event_at
+      SELECT t.id, t.external_trx_id, t.amount_minor, t.sender_name, t.sender_phone, t.financial_event_at,
+             t.payment_source_id, t.reconciliation_state, t.provenance_confidence, t.signature
       FROM transactions t
-      WHERE t.organization_id = 'org_platform_ops'
+      WHERE t.organization_id = ?
+        AND t.payment_source_id = ?
         AND t.status = 'confirmed'
-        AND t.amount = ?
+        AND t.reconciliation_state = 'consistent'
+        AND t.provenance_confidence >= 1
+        AND t.signature IS NOT NULL
+        AND trim(t.signature) != ''
+        AND t.signature != 'webhook_token_verified'
+        AND t.amount_minor = ?
+        AND lower(trim(t.external_trx_id)) = ?
         AND t.id NOT IN (
           SELECT matched_transaction_id FROM subscription_orders WHERE matched_transaction_id IS NOT NULL AND status = 'confirmed'
         )
       ORDER BY t.financial_event_at ASC
-    `).all(order.price_egp) as any[];
+    `).all(settings.platform_org_id, settings.platform_source_id, order.price_minor, reference) as any[];
 
-    if (candidates.length === 0) {
-      // No matching amount arrived yet; put in review so owner can inspect
-      if (order.status === 'payment_reported') {
-        db.prepare("UPDATE subscription_orders SET status = 'in_review', updated_at = datetime('now') WHERE id = ?").run(orderId);
-      }
+    if (candidates.length !== 1) {
+      this.markOrderForReview(
+        orderId,
+        candidates.length === 0
+          ? 'No independently captured platform transaction with this exact trusted reference was found.'
+          : 'More than one platform transaction has the same trusted reference and requires platform-owner review.'
+      );
       return { matched: false };
     }
 
-    // Check candidate with cryptographic/telecom reference equality
-    let matchedCandidate: any = null;
-
-    if (order.reported_transfer_ref) {
-      const cleanReportedRef = order.reported_transfer_ref.toLowerCase().trim();
-      matchedCandidate = candidates.find((c) => {
-        const ext = (c.external_trx_id || '').toLowerCase().trim();
-        return ext === cleanReportedRef || ext.includes(cleanReportedRef) || cleanReportedRef.includes(ext);
-      });
-    }
-
-    if (!matchedCandidate && order.reported_sender_info) {
-      const cleanSender = order.reported_sender_info.toLowerCase().trim();
-      matchedCandidate = candidates.find((c) => {
-        const phone = (c.sender_phone || '').toLowerCase().trim();
-        const name = (c.sender_name || '').toLowerCase().trim();
-        return (phone && phone.includes(cleanSender)) || (name && name.includes(cleanSender));
-      });
-    }
-
-    // If there is only ONE candidate with this exact amount and the user reported a payment claim,
-    // we require either reference verification OR route to manual owner review queue!
-    if (!matchedCandidate) {
-      db.prepare(`
-        UPDATE subscription_orders
-        SET status = 'in_review',
-            review_notes = 'Candidate transaction detected with matching amount but unverified reference; routed to platform owner review queue.',
-            updated_at = datetime('now')
-        WHERE id = ?
-      `).run(orderId);
-      return { matched: false };
-    }
-
-    // Authentic Match Verified! Execute single-spend activation
+    const matchedCandidate = candidates[0];
     this.activateSubscriptionFromOrder({
       orderId,
       transactionId: matchedCandidate.id,
@@ -290,54 +406,96 @@ export class SubscriptionService {
    */
   static handleInboundPlatformTransaction(tx: {
     id: string;
-    amount: number;
+    /** Amount in integer piastres. */
+    amountMinor: number;
     externalTrxId: string;
     senderPhone?: string;
     senderName?: string;
   }): { autoActivatedOrderId?: string } {
     const db = getDatabase();
+    const settings = this.getPlatformSettings();
+    const incoming = db.prepare(`
+      SELECT t.id, t.external_trx_id, t.amount_minor
+      FROM transactions t
+      WHERE t.id = ?
+        AND t.organization_id = ?
+        AND t.payment_source_id = ?
+        AND t.status = 'confirmed'
+        AND t.reconciliation_state = 'consistent'
+        AND t.provenance_confidence >= 1
+        AND t.signature IS NOT NULL
+        AND trim(t.signature) != ''
+        AND t.signature != 'webhook_token_verified'
+    `).get(tx.id, settings.platform_org_id, settings.platform_source_id) as any;
 
-    // Check if any pending, payment_reported, or in_review orders match this transaction
-    const candidateOrders = db.prepare(`
-      SELECT * FROM subscription_orders
-      WHERE status IN ('payment_reported', 'in_review', 'pending_payment')
-        AND price_egp = ?
-        AND matched_transaction_id IS NULL
-      ORDER BY created_at ASC
-    `).all(tx.amount) as unknown as SubscriptionOrder[];
-
-    if (candidateOrders.length === 0) {
+    const reference = normalizeTransferReference(incoming?.external_trx_id);
+    if (!incoming || !reference || !sameMinor(incoming.amount_minor, tx.amountMinor)) {
       return {};
     }
 
-    // 1. Look for order with matching reported reference
-    const cleanExt = tx.externalTrxId.toLowerCase().trim();
-    let matchedOrder = candidateOrders.find((ord) => {
-      if (!ord.reported_transfer_ref) return false;
-      const ref = ord.reported_transfer_ref.toLowerCase().trim();
-      return ref === cleanExt || cleanExt.includes(ref) || ref.includes(cleanExt);
+    // An inbound transaction cannot activate an order until the merchant has
+    // reported its exact reference. Sender details and equal amounts are never
+    // sufficient to choose an order.
+    const candidateOrders = db.prepare(`
+      SELECT *, ${PRICE_EGP_COLUMN} FROM subscription_orders
+      WHERE status = 'payment_reported'
+        AND price_minor = ?
+        AND matched_transaction_id IS NULL
+        AND lower(trim(reported_transfer_ref)) = ?
+      ORDER BY created_at ASC
+    `).all(incoming.amount_minor, reference) as unknown as SubscriptionOrder[];
+
+    if (candidateOrders.length !== 1) {
+      if (candidateOrders.length > 1) {
+        for (const order of candidateOrders) {
+          this.markOrderForReview(order.id, 'Multiple subscription orders claim the same platform transfer reference.');
+        }
+      }
+      return {};
+    }
+
+    const matchedOrder = candidateOrders[0];
+    this.activateSubscriptionFromOrder({
+      orderId: matchedOrder.id,
+      transactionId: incoming.id,
+      matchedExternalTrxId: incoming.external_trx_id,
+      approvalType: 'automatic',
     });
+    return { autoActivatedOrderId: matchedOrder.id };
+  }
 
-    // 2. Look for order with matching sender info
-    if (!matchedOrder && (tx.senderPhone || tx.senderName)) {
-      matchedOrder = candidateOrders.find((ord) => {
-        if (!ord.reported_sender_info) return false;
-        const sender = ord.reported_sender_info.toLowerCase().trim();
-        return (tx.senderPhone && tx.senderPhone.includes(sender)) || (tx.senderName && tx.senderName.toLowerCase().includes(sender));
-      });
-    }
+  private static markOrderForReview(orderId: string, reason: string): void {
+    const db = getDatabase();
+    db.prepare(`
+      UPDATE subscription_orders
+      SET status = 'in_review', review_notes = ?, updated_at = datetime('now')
+      WHERE id = ? AND status != 'confirmed'
+    `).run(reason, orderId);
+  }
 
-    if (matchedOrder) {
-      this.activateSubscriptionFromOrder({
-        orderId: matchedOrder.id,
-        transactionId: tx.id,
-        matchedExternalTrxId: tx.externalTrxId,
-        approvalType: 'automatic',
-      });
-      return { autoActivatedOrderId: matchedOrder.id };
-    }
+  private static getPlatformTransaction(db: DatabaseSync, transactionId: string): any | null {
+    const settings = this.getPlatformSettings();
+    return db.prepare(`
+      SELECT t.id, t.external_trx_id, t.amount_minor, t.status, t.reconciliation_state,
+             t.provenance_confidence, t.signature, t.organization_id, t.payment_source_id
+      FROM transactions t
+      WHERE t.id = ?
+        AND t.organization_id = ?
+        AND t.payment_source_id = ?
+    `).get(transactionId, settings.platform_org_id, settings.platform_source_id) as any | null;
+  }
 
-    return {};
+  private static isTrustedPlatformTransaction(transaction: any): boolean {
+    return Boolean(
+      transaction &&
+      transaction.status === 'confirmed' &&
+      transaction.reconciliation_state === 'consistent' &&
+      Number(transaction.provenance_confidence) >= 1 &&
+      typeof transaction.signature === 'string' &&
+      transaction.signature.trim() !== '' &&
+      transaction.signature !== 'webhook_token_verified' &&
+      normalizeTransferReference(transaction.external_trx_id)
+    );
   }
 
   /**
@@ -356,7 +514,7 @@ export class SubscriptionService {
 
     db.exec('BEGIN IMMEDIATE;');
     try {
-      const order = db.prepare('SELECT * FROM subscription_orders WHERE id = ?').get(params.orderId) as unknown as SubscriptionOrder;
+      const order = this.getOrderById(params.orderId) as SubscriptionOrder;
       if (!order) {
         throw new Error('ORDER_NOT_FOUND');
       }
@@ -364,6 +522,18 @@ export class SubscriptionService {
       if (order.status === 'confirmed') {
         db.exec('COMMIT;');
         return; // Idempotent
+      }
+
+      if (params.approvalType === 'automatic' && !params.transactionId) {
+        throw new Error('AUTO_ACTIVATION_REQUIRES_TRUSTED_PLATFORM_TRANSACTION');
+      }
+
+      if (params.approvalType === 'manual' && !params.approvedByUserId?.trim()) {
+        throw new Error('MANUAL_APPROVAL_REQUIRES_PLATFORM_OWNER');
+      }
+
+      if (params.approvalType === 'manual' && !params.reviewNotes?.trim()) {
+        throw new Error('MANUAL_APPROVAL_REQUIRES_REASON');
       }
 
       // If a transaction was provided, verify it has not been used by any other confirmed order
@@ -375,6 +545,19 @@ export class SubscriptionService {
 
         if (doubleSpendCheck) {
           throw new Error(`TRANSACTION_ALREADY_USED_BY_ORDER_${doubleSpendCheck.order_number}`);
+        }
+
+        const platformTransaction = this.getPlatformTransaction(db, params.transactionId);
+        if (!platformTransaction || !sameMinor(platformTransaction.amount_minor, order.price_minor)) {
+          throw new Error('INVALID_PLATFORM_TRANSACTION');
+        }
+
+        if (params.approvalType === 'automatic') {
+          const externalReference = normalizeTransferReference(params.matchedExternalTrxId);
+          const transactionReference = normalizeTransferReference(platformTransaction.external_trx_id);
+          if (!this.isTrustedPlatformTransaction(platformTransaction) || !externalReference || externalReference !== transactionReference) {
+            throw new Error('AUTO_ACTIVATION_REQUIRES_TRUSTED_PLATFORM_TRANSACTION');
+          }
         }
       }
 
@@ -455,7 +638,7 @@ export class SubscriptionService {
       db.prepare(`
         INSERT INTO subscription_receipts (
           id, receipt_number, order_id, organization_id, plan_id,
-          amount_paid, currency, payment_method, matched_external_trx_id,
+          amount_paid_minor, currency, payment_method, matched_external_trx_id,
           billing_cycle, period_start, period_end, issued_at
         ) VALUES (?, ?, ?, ?, ?, ?, 'EGP', 'instapay_manual', ?, ?, ?, ?, ?)
       `).run(
@@ -464,7 +647,7 @@ export class SubscriptionService {
         order.id,
         order.organization_id,
         order.plan_id,
-        order.price_egp,
+        order.price_minor,
         params.matchedExternalTrxId || null,
         order.billing_cycle,
         startsAt,
@@ -508,15 +691,18 @@ export class SubscriptionService {
     reason: string;
   }): void {
     const db = getDatabase();
-    const order = db.prepare('SELECT * FROM subscription_orders WHERE id = ?').get(params.orderId) as unknown as SubscriptionOrder;
+    const order = this.getOrderById(params.orderId) as SubscriptionOrder;
     if (!order) {
       throw new Error('ORDER_NOT_FOUND');
+    }
+    if (!params.platformOwnerUserId?.trim() || !params.reason?.trim()) {
+      throw new Error('MANUAL_APPROVAL_REQUIRES_PLATFORM_OWNER_AND_REASON');
     }
 
     let externalTrxId: string | undefined;
     if (params.transactionId) {
-      const tx = db.prepare("SELECT external_trx_id FROM transactions WHERE id = ? AND organization_id = 'org_platform_ops'").get(params.transactionId) as any;
-      if (!tx) {
+      const tx = this.getPlatformTransaction(db, params.transactionId);
+      if (!tx || !sameMinor(tx.amount_minor, order.price_minor)) {
         throw new Error('INVALID_PLATFORM_TRANSACTION');
       }
       externalTrxId = tx.external_trx_id;
@@ -564,7 +750,7 @@ export class SubscriptionService {
   }
 
   /**
-   * Starts a 14-day (336 hours) free trial with 1 capture phone limit for a newly registered workspace.
+   * Starts exactly seven days (168 hours) of trial access with one capture phone.
    */
   static startFreeTrial(organizationId: string): void {
     const db = getDatabase();
@@ -576,8 +762,7 @@ export class SubscriptionService {
 
     const now = new Date();
     const startsAt = now.toISOString();
-    // Exactly 14 days (336 calendar hours in UTC)
-    const endsAt = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const endsAt = new Date(now.getTime() + FREE_TRIAL_DURATION_HOURS * 60 * 60 * 1000).toISOString();
     const trialSubId = `sub_trial_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
     const trialFeatures = JSON.stringify([
       'realtime_reconciliation',
@@ -592,8 +777,18 @@ export class SubscriptionService {
       INSERT INTO organization_subscriptions (
         id, organization_id, plan_id, status, starts_at, ends_at,
         device_limit, features_json, trial_warn_48h_sent, trial_warn_24h_sent, created_at, updated_at
-      ) VALUES (?, ?, 'plan_trial_14d', 'trial', ?, ?, 1, ?, 0, 0, ?, ?)
-    `).run(trialSubId, organizationId, startsAt, endsAt, trialFeatures, startsAt, startsAt);
+      ) VALUES (?, ?, ?, 'trial', ?, ?, ?, ?, 0, 0, ?, ?)
+    `).run(
+      trialSubId,
+      organizationId,
+      FREE_TRIAL_PLAN_ID,
+      startsAt,
+      endsAt,
+      FREE_TRIAL_DEVICE_LIMIT,
+      trialFeatures,
+      startsAt,
+      startsAt
+    );
 
     AuditService.record({
       organizationId,
@@ -604,8 +799,8 @@ export class SubscriptionService {
       details: {
         startsAt,
         endsAt,
-        durationHours: 336,
-        deviceLimit: 1,
+        durationHours: FREE_TRIAL_DURATION_HOURS,
+        deviceLimit: FREE_TRIAL_DEVICE_LIMIT,
       },
     });
   }
@@ -665,21 +860,21 @@ export class SubscriptionService {
     let allowed = true;
     const maxLimit = sub.device_limit || sub.plan_limit || 1;
 
-    // Handle 14-Day Free Trial lifecycle
+    // Free trial lifecycle: exactly seven days and one capture phone.
     if (status === 'trial') {
-      if (now > endsAt) {
+      if (now >= endsAt) {
         status = 'trial_expired';
         db.prepare("UPDATE organization_subscriptions SET status = 'trial_expired', updated_at = datetime('now') WHERE organization_id = ?").run(organizationId);
         allowed = false; // Trial expired: completely prohibit adding/pairing new devices
       } else {
-        allowed = currentCount < 1; // Strict 1-phone limit during trial
+        allowed = currentCount < FREE_TRIAL_DEVICE_LIMIT;
       }
 
       return {
         allowed,
         currentCount,
-        maxLimit: 1,
-        planName: status === 'trial' ? 'تجربة مجانية 14 يوم (هاتف واحد)' : 'انتهت التجربة المجانية',
+        maxLimit: FREE_TRIAL_DEVICE_LIMIT,
+        planName: status === 'trial' ? 'تجربة مجانية 7 أيام (هاتف واحد)' : 'انتهت التجربة المجانية',
         subscriptionStatus: status,
         daysRemaining,
         hoursRemaining,
@@ -690,7 +885,7 @@ export class SubscriptionService {
       return {
         allowed: false,
         currentCount,
-        maxLimit: 1,
+        maxLimit: FREE_TRIAL_DEVICE_LIMIT,
         planName: 'انتهت التجربة المجانية',
         subscriptionStatus: 'trial_expired',
         daysRemaining: 0,
@@ -731,7 +926,7 @@ export class SubscriptionService {
   static getOrganizationSubscription(organizationId: string) {
     const db = getDatabase();
     const sub = db.prepare(`
-      SELECT s.*, p.name_ar as plan_name_ar, p.name_en as plan_name_en, p.price_egp, p.billing_cycle,
+      SELECT s.*, p.name_ar as plan_name_ar, p.name_en as plan_name_en, p.price_minor, p.billing_cycle,
              p.features_json as plan_features
       FROM organization_subscriptions s
       LEFT JOIN subscription_plans p ON s.plan_id = p.id
@@ -773,7 +968,7 @@ export class SubscriptionService {
     let trialExpired = false;
 
     if (sub.status === 'trial') {
-      if (now > endsAt) {
+      if (now >= endsAt) {
         status = 'trial_expired';
         trialExpired = true;
         db.prepare("UPDATE organization_subscriptions SET status = 'trial_expired', updated_at = datetime('now') WHERE organization_id = ?").run(organizationId);
@@ -799,10 +994,10 @@ export class SubscriptionService {
       hasSubscription: true,
       id: sub.id,
       planId: sub.plan_id,
-      planNameAr: sub.status === 'trial' ? 'تجربة مجانية 14 يوم' : sub.status === 'trial_expired' ? 'انتهت التجربة المجانية' : (sub.plan_name_ar || 'باقة معتمدة'),
-      planNameEn: sub.status === 'trial' ? '14-Day Free Trial' : sub.status === 'trial_expired' ? 'Trial Expired' : (sub.plan_name_en || 'Active Plan'),
+      planNameAr: status === 'trial' ? 'تجربة مجانية 7 أيام' : status === 'trial_expired' ? 'انتهت التجربة المجانية' : (sub.plan_name_ar || 'باقة معتمدة'),
+      planNameEn: status === 'trial' ? '7-Day Free Trial' : status === 'trial_expired' ? 'Trial Expired' : (sub.plan_name_en || 'Active Plan'),
       billingCycle: sub.billing_cycle || 'monthly',
-      priceEgp: sub.price_egp || 0,
+      priceEgp: fromMinor(sub.price_minor ?? 0),
       status,
       isTrial,
       trialExpired,
@@ -819,49 +1014,77 @@ export class SubscriptionService {
   }
 
   /**
-   * Sends 48h and 24h warning notifications without spam or fake messages.
+   * Queues 48h and 24h trial warnings once. Delivery is handled by the durable
+   * outbox worker, so a browser request never exposes Telegram credentials or
+   * pretends that a notification was sent.
    */
   private static checkTrialWarnings(sub: any, hoursRemaining: number): void {
     const db = getDatabase();
+    const warning = hoursRemaining <= 24 && !sub.trial_warn_24h_sent
+      ? {
+          window: '24h' as const,
+          flagColumn: 'trial_warn_24h_sent',
+          auditAction: 'TRIAL_EXPIRATION_WARNING_24H',
+          text: '🚨 تنبيه أخير من صرّاف: باقٍ أقل من 24 ساعة على انتهاء التجربة المجانية. اختار باقتك الآن لتفادي توقف معالجة واستقبال الرسائل الجديدة على هواتف الالتقاط.',
+        }
+      : hoursRemaining <= 48 && !sub.trial_warn_48h_sent
+        ? {
+            window: '48h' as const,
+            flagColumn: 'trial_warn_48h_sent',
+            auditAction: 'TRIAL_EXPIRATION_WARNING_48H',
+            text: '⚠️ تنبيه صرّاف: تجربتك المجانية قربت تخلص (باقي أقل من 48 ساعة). اختار الباقة المناسبة قبل انتهاء التجربة عشان تستمر متابعة الرسائل الجديدة بدون توقف.',
+          }
+        : null;
+
+    if (!warning) {
+      return;
+    }
+
     try {
-      if (hoursRemaining <= 48 && hoursRemaining > 24 && !sub.trial_warn_48h_sent) {
-        db.prepare("UPDATE organization_subscriptions SET trial_warn_48h_sent = 1, updated_at = datetime('now') WHERE id = ?").run(sub.id);
-        AuditService.record({
-          organizationId: sub.organization_id,
-          actorIdentity: 'system_trial_scheduler',
-          action: 'TRIAL_EXPIRATION_WARNING_48H',
-          resourceType: 'subscription',
-          resourceId: sub.id,
-          details: { hoursRemaining },
-        });
+      db.exec('BEGIN IMMEDIATE;');
+      const current = db.prepare(`
+        SELECT ${warning.flagColumn} as sent
+        FROM organization_subscriptions
+        WHERE id = ? AND organization_id = ? AND status = 'trial'
+      `).get(sub.id, sub.organization_id) as { sent?: number } | undefined;
 
-        // If organization has Telegram configured, send real message
-        const org = db.prepare('SELECT telegram_bot_token, telegram_chat_id FROM organizations WHERE id = ?').get(sub.organization_id) as any;
-        if (org?.telegram_bot_token && org?.telegram_chat_id) {
-          const msg = encodeURIComponent(
-            '⚠️ تنبيه صرّاف: تجربتك المجانية قربت تخلص (باقي أقل من 48 ساعة).\nنتمنى صرّاف يكون ساعدك تتابع تحويلاتك بشكل أوضح. اختار الباقة المناسبة قبل انتهاء التجربة عشان تستمر متابعة الرسائل الجديدة بدون توقف.'
-          );
-          fetch(`https://api.telegram.org/bot${org.telegram_bot_token}/sendMessage?chat_id=${org.telegram_chat_id}&text=${msg}`).catch(() => {});
-        }
-      } else if (hoursRemaining <= 24 && !sub.trial_warn_24h_sent) {
-        db.prepare("UPDATE organization_subscriptions SET trial_warn_24h_sent = 1, updated_at = datetime('now') WHERE id = ?").run(sub.id);
-        AuditService.record({
-          organizationId: sub.organization_id,
-          actorIdentity: 'system_trial_scheduler',
-          action: 'TRIAL_EXPIRATION_WARNING_24H',
-          resourceType: 'subscription',
-          resourceId: sub.id,
-          details: { hoursRemaining },
-        });
-
-        const org = db.prepare('SELECT telegram_bot_token, telegram_chat_id FROM organizations WHERE id = ?').get(sub.organization_id) as any;
-        if (org?.telegram_bot_token && org?.telegram_chat_id) {
-          const msg = encodeURIComponent(
-            '🚨 تنبيه أخير من صرّاف: باقٍ أقل من 24 ساعة على انتهاء التجربة المجانية.\nاختار باقتك الآن لتفادي توقف معالجة واستقبال الرسائل الجديدة على هواتف الالتقاط.'
-          );
-          fetch(`https://api.telegram.org/bot${org.telegram_bot_token}/sendMessage?chat_id=${org.telegram_chat_id}&text=${msg}`).catch(() => {});
-        }
+      if (!current || current.sent) {
+        db.exec('COMMIT;');
+        return;
       }
-    } catch {}
+
+      db.prepare(`
+        UPDATE organization_subscriptions
+        SET ${warning.flagColumn} = 1, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(sub.id);
+      this.enqueueTrialWarning(sub, warning.window, warning.text);
+      db.exec('COMMIT;');
+
+      AuditService.record({
+        organizationId: sub.organization_id,
+        actorIdentity: 'system_trial_scheduler',
+        action: warning.auditAction,
+        resourceType: 'subscription',
+        resourceId: sub.id,
+        details: { hoursRemaining },
+      });
+    } catch {
+      try {
+        db.exec('ROLLBACK;');
+      } catch {}
+    }
+  }
+
+  private static enqueueTrialWarning(sub: { id: string; organization_id: string }, warningWindow: '48h' | '24h', text: string): void {
+    const db = getDatabase();
+    db.prepare(`
+      INSERT OR IGNORE INTO outbox_jobs (id, organization_id, job_type, payload)
+      VALUES (?, ?, 'send_telegram', ?)
+    `).run(
+      `trial_warning_${sub.id}_${warningWindow}`,
+      sub.organization_id,
+      JSON.stringify({ text, event: 'trial_expiration_warning', warningWindow, subscriptionId: sub.id })
+    );
   }
 }

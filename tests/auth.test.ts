@@ -37,13 +37,13 @@ test('Auth: Clean Merchant Registration Creates Isolated Workspace with Zero Moc
 
   // 4. Create Clean Initial Balance Account (Zero Balance)
   db.prepare(`
-    INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance)
-    VALUES ('acc_fresh_01', ?, 'Main Operational Account (EGP)', 'EGP', 0.0)
+    INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance_minor)
+    VALUES ('acc_fresh_01', ?, 'Main Operational Account (EGP)', 'EGP', 0)
   `).run(orgId);
 
   // Verify workspace exists with 0 balance
-  const account = db.prepare('SELECT current_balance FROM balance_accounts WHERE organization_id = ?').get(orgId) as any;
-  assert.strictEqual(account.current_balance, 0.0);
+  const account = db.prepare('SELECT current_balance_minor FROM balance_accounts WHERE organization_id = ?').get(orgId) as any;
+  assert.strictEqual(account.current_balance_minor, 0);
 
   // Verify new merchant starts with 0 devices
   const devices = db.prepare('SELECT * FROM devices WHERE organization_id = ?').all(orgId);

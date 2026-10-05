@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PlatformOverview, SubscriptionPlan, SubscriptionOrder } from '../types';
+import { apiFetch } from '../api';
 
 interface PlatformDashboardViewProps {
   language: 'en' | 'ar';
@@ -32,24 +33,16 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
   const [selectedTxnId, setSelectedTxnId] = useState<string>('');
   const [isProcessingAction, setIsProcessingAction] = useState<boolean>(false);
 
-  // Editing Plan Modal State
-  const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
-  const [planPrice, setPlanPrice] = useState<number>(0);
-  const [planDeviceLimit, setPlanDeviceLimit] = useState<number>(0);
-
   const fetchPlatformData = async () => {
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     try {
       setLoading(true);
       const [overRes, ordRes, plansRes, subsRes, txnsRes, settRes] = await Promise.all([
-        fetch('/api/v1/platform/overview', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/platform/orders', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/platform/plans', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/platform/subscriptions', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/platform/transactions', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/platform/settings', { headers: { Authorization: `Bearer ${token}` } }),
+        apiFetch('/api/v1/platform/overview'),
+        apiFetch('/api/v1/platform/orders'),
+        apiFetch('/api/v1/platform/plans'),
+        apiFetch('/api/v1/platform/subscriptions'),
+        apiFetch('/api/v1/platform/transactions'),
+        apiFetch('/api/v1/platform/settings'),
       ]);
 
       if (overRes.ok) setOverview(await overRes.json());
@@ -75,16 +68,12 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     setIsSavingSettings(true);
     try {
-      const res = await fetch('/api/v1/platform/settings', {
+      const res = await apiFetch('/api/v1/platform/settings', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           instapayNumber: instapayNumber.trim(),
@@ -116,16 +105,12 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
       return;
     }
 
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     setIsProcessingAction(true);
     try {
-      const res = await fetch(`/api/v1/platform/orders/${selectedOrder.id}/approve`, {
+      const res = await apiFetch(`/api/v1/platform/orders/${selectedOrder.id}/approve`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           reason: actionReason.trim(),
@@ -157,16 +142,12 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
       return;
     }
 
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     setIsProcessingAction(true);
     try {
-      const res = await fetch(`/api/v1/platform/orders/${selectedOrder.id}/reject`, {
+      const res = await apiFetch(`/api/v1/platform/orders/${selectedOrder.id}/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           reason: actionReason.trim(),
@@ -187,37 +168,6 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
       showToast(language === 'ar' ? 'خطأ في رفض الطلب' : 'Action failed');
     } finally {
       setIsProcessingAction(false);
-    }
-  };
-
-  const handleUpdatePlan = async () => {
-    if (!editingPlan) return;
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
-    try {
-      const res = await fetch(`/api/v1/platform/plans/${editingPlan.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          priceEgp: planPrice,
-          deviceLimit: planDeviceLimit,
-        }),
-      });
-
-      if (res.ok) {
-        showToast(language === 'ar' ? 'تم تحديث بيانات الباقة بنجاح' : 'Plan updated');
-        setEditingPlan(null);
-        fetchPlatformData();
-      } else {
-        const err = await res.json();
-        showToast(err.message || 'Failed to update plan');
-      }
-    } catch {
-      showToast(language === 'ar' ? 'خطأ في التحديث' : 'Update error');
     }
   };
 
@@ -258,7 +208,7 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
           { id: 'overview', icon: 'dashboard', ar: 'المؤشرات العامة', en: 'Overview' },
           { id: 'orders', icon: 'fact_check', ar: 'طلبات الاشتراك والمطابقة', en: 'Orders Queue', count: overview?.pendingReviewOrders },
           { id: 'settings', icon: 'tune', ar: 'إعدادات رقم إنستاباي', en: 'Receiver Settings' },
-          { id: 'plans', icon: 'inventory_2', ar: 'إدارة الباقات والأسعار', en: 'Plans & Pricing' },
+          { id: 'plans', icon: 'inventory_2', ar: 'الباقات الرسمية', en: 'Official Plans' },
           { id: 'subscriptions', icon: 'card_membership', ar: 'المشتركون والاشتراكات', en: 'Active Subscribers' },
           { id: 'inbound', icon: 'receipt', ar: 'تحويلات هاتف المنصة', en: 'Platform Inbound Feed' },
         ].map((tab) => (
@@ -556,12 +506,12 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
         <div className="space-y-4">
           <div className="p-6 rounded-2xl bg-surface-container-lowest border border-outline-variant shadow-xs">
             <h3 className="text-title-md font-bold text-on-surface mb-1">
-              {language === 'ar' ? 'إدارة أسعار وحدود الباقات' : 'Manage Subscription Plans & Phone Limits'}
+              {language === 'ar' ? 'الباقات الرسمية وحدود الهواتف' : 'Official Subscription Plans & Phone Limits'}
             </h3>
             <p className="text-body-xs text-on-surface-variant mb-4">
               {language === 'ar'
-                ? 'يمكنك تعديل الأسعار وحدود الهواتف. التعديل يسري على المشتركين الجدد والطلبات القادمة دون التأثير على الاشتراكات النشطة بأثر رجعي.'
-                : 'Modify plan prices and phone limits. Changes apply to future subscriptions without modifying past billing periods.'}
+                ? 'شروط الباقات وأسعارها وحدود الأجهزة تُدار مركزياً ولا يمكن تعديلها من لوحة التشغيل.'
+                : 'Plan terms, prices, and device limits are centrally managed and cannot be changed from the operations console.'}
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -587,17 +537,10 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => {
-                      setEditingPlan(p);
-                      setPlanPrice(p.price_egp);
-                      setPlanDeviceLimit(p.device_limit);
-                    }}
-                    className="w-full py-2 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface text-label-sm font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-base">edit</span>
-                    <span>{language === 'ar' ? 'تعديل السعر والحد' : 'Edit Plan'}</span>
-                  </button>
+                  <div className="w-full py-2 rounded-lg bg-surface-container-high text-on-surface-variant text-label-sm font-semibold flex items-center justify-center gap-1.5">
+                    <span className="material-symbols-outlined text-base">lock</span>
+                    <span>{language === 'ar' ? 'شروط باقة معتمدة' : 'Approved plan terms'}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -834,67 +777,6 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
         </div>
       )}
 
-      {/* Edit Plan Modal */}
-      {editingPlan && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95">
-            <div className="p-6 bg-surface-container-low border-b border-outline-variant flex items-center justify-between">
-              <h3 className="text-title-md font-bold text-on-surface">
-                {language === 'ar' ? 'تعديل سعر وحدود الباقة' : 'Edit Plan Pricing & Limit'}
-              </h3>
-              <button onClick={() => setEditingPlan(null)} className="p-1 rounded-lg text-on-surface-variant">
-                <span className="material-symbols-outlined text-xl">close</span>
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div>
-                <span className="text-label-xs text-on-surface-variant block">{language === 'ar' ? 'اسم الباقة:' : 'Plan:'}</span>
-                <span className="text-title-sm font-bold text-on-surface">{editingPlan.name_ar}</span>
-              </div>
-
-              <div>
-                <label className="block text-label-sm font-bold text-on-surface mb-1">
-                  {language === 'ar' ? 'السعر بالجنيه المصري (EGP):' : 'Price (EGP):'}
-                </label>
-                <input
-                  type="number"
-                  value={planPrice}
-                  onChange={(e) => setPlanPrice(Number(e.target.value))}
-                  className="w-full px-3.5 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="block text-label-sm font-bold text-on-surface mb-1">
-                  {language === 'ar' ? 'سعة هواتف التقاط الرسائل:' : 'Phone Limit:'}
-                </label>
-                <input
-                  type="number"
-                  value={planDeviceLimit}
-                  onChange={(e) => setPlanDeviceLimit(Number(e.target.value))}
-                  className="w-full px-3.5 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface font-mono font-bold"
-                />
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-outline-variant bg-surface-container-low flex items-center justify-between">
-              <button
-                onClick={() => setEditingPlan(null)}
-                className="px-4 py-2 rounded-lg bg-surface-container-high text-on-surface text-label-sm font-semibold"
-              >
-                {language === 'ar' ? 'إلغاء' : 'Cancel'}
-              </button>
-              <button
-                onClick={handleUpdatePlan}
-                className="px-5 py-2 rounded-xl bg-primary text-on-primary font-bold text-label-md hover:bg-primary/90 transition-all cursor-pointer"
-              >
-                {language === 'ar' ? 'حفظ التعديلات' : 'Save Changes'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

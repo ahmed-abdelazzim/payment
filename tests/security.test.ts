@@ -10,14 +10,14 @@ test('Security: Tenant Isolation at Database Layer', () => {
   db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES ('org_A', 'Tenant Alpha', 'ألفا', 'alpha')`).run();
   db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES ('org_B', 'Tenant Beta', 'بيتا', 'beta')`).run();
 
-  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance) VALUES ('acc_A', 'org_A', 'Alpha Account', 5000)`).run();
-  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance) VALUES ('acc_B', 'org_B', 'Beta Account', 9000)`).run();
+  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor) VALUES ('acc_A', 'org_A', 'Alpha Account', 500000)`).run();
+  db.prepare(`INSERT INTO balance_accounts (id, organization_id, account_name, current_balance_minor) VALUES ('acc_B', 'org_B', 'Beta Account', 900000)`).run();
 
   // Querying with Tenant A context must NEVER return Tenant B's account
   const queryTenantA = db.prepare(`SELECT * FROM balance_accounts WHERE organization_id = ?`).all('org_A') as any[];
   assert.strictEqual(queryTenantA.length, 1);
   assert.strictEqual(queryTenantA[0].id, 'acc_A');
-  assert.strictEqual(queryTenantA[0].current_balance, 5000);
+  assert.strictEqual(queryTenantA[0].current_balance_minor, 500000);
 
   // Cross-tenant attempt returns 0 rows
   const crossTenantCheck = db.prepare(`SELECT * FROM balance_accounts WHERE organization_id = 'org_A' AND id = 'acc_B'`).all();

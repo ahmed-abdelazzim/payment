@@ -1,6 +1,10 @@
 -- PostgreSQL Initial Migration: Sarraf Ops Multi-Tenant Schema
 -- File: migrations/postgres/001_initial_schema.sql
 
+-- `gen_random_uuid()` is provided by pgcrypto on supported PostgreSQL versions.
+-- Keep uuid-ossp as well for installations that use it elsewhere, but do not
+-- rely on it for the defaults in this schema.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 1. Organizations

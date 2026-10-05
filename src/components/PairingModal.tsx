@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { Device } from '../types';
+import { Device, ProviderRail } from '../types';
+import { apiFetch } from '../api';
 
 interface PairingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onDevicePaired: (device: Device) => void;
+  rails: ProviderRail[];
   language: 'en' | 'ar';
 }
 
@@ -12,12 +14,14 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   isOpen,
   onClose,
   onDevicePaired,
+  rails,
   language,
 }) => {
   const [friendlyName, setFriendlyName] = useState('');
   const [deviceIdentifier, setDeviceIdentifier] = useState(`POS-${Math.floor(100 + Math.random() * 900)}`);
   const [location, setLocation] = useState('');
   const [adapterType, setAdapterType] = useState<'macrodroid' | 'native_agent' | 'apple_shortcuts' | 'huawei_emui'>('macrodroid');
+  const [paymentSourceId, setPaymentSourceId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,27 +32,30 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     expiresAt: string;
   } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedBody, setCopiedBody] = useState(false);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!paymentSourceId) {
+      setError(language === 'ar' ? 'اختر محفظة أو حساب الاستقبال الذي سيتبعه هذا الجهاز.' : 'Select the receiving source this device will monitor.');
+      return;
+    }
     setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch('/api/v1/devices', {
+      const res = await apiFetch('/api/v1/devices', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
         },
         body: JSON.stringify({
           friendlyName,
           deviceIdentifier,
           location: location || 'Main Terminal Gate',
           adapterType,
+          paymentSourceId,
         }),
       });
 
@@ -63,14 +70,15 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         expiresAt: data.expiresAt,
       });
 
+      const selectedRail = rails.find((rail) => rail.id === paymentSourceId);
       onDevicePaired({
         id: data.deviceId,
         deviceNumber: deviceIdentifier,
         name: friendlyName,
         location: location || 'Main Terminal',
-        provider: 'vodafone_cash',
-        providerLabel: 'Vodafone Cash',
-        phoneNumber: '01019283921',
+        provider: selectedRail?.provider || 'vodafone_cash',
+        providerLabel: selectedRail?.name || 'Receiving source',
+        phoneNumber: selectedRail?.walletNumber || '',
         status: 'online',
         batteryLevel: 100,
         lastPing: 'Just paired',
@@ -165,6 +173,32 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 
             <div>
               <label className="block text-label-md text-on-surface font-medium mb-1">
+                {language === 'ar' ? 'محفظة أو حساب الاستقبال المرتبط بالجهاز' : 'Receiving source monitored by this device'}
+              </label>
+              <select
+                required
+                value={paymentSourceId}
+                onChange={(e) => setPaymentSourceId(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
+              >
+                <option value="">
+                  {language === 'ar' ? 'اختر مصدر الاستقبال' : 'Select a receiving source'}
+                </option>
+                {rails.map((rail) => (
+                  <option key={rail.id} value={rail.id}>
+                    {rail.name} · {rail.walletNumber}
+                  </option>
+                ))}
+              </select>
+              {rails.length === 0 && (
+                <p className="mt-1.5 text-label-sm text-error">
+                  {language === 'ar' ? 'أضف مصدر استقبال أولاً قبل ربط هاتف.' : 'Add a receiving source before pairing a phone.'}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-label-md text-on-surface font-medium mb-1">
                 {language === 'ar' ? 'نوع نظام التشغيل ومحوّل الالتقاط' : 'Operating System & Adapter'}
               </label>
               <select
@@ -195,7 +229,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || rails.length === 0}
                 className="px-5 py-2.5 rounded-lg bg-primary text-on-primary text-label-md font-semibold hover:bg-primary/90 transition-all flex items-center gap-2 disabled:opacity-50"
               >
                 {loading ? (
@@ -228,89 +262,21 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               </button>
             </div>
 
-            {/* Direct Webhook URL Box */}
-            <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-on-surface flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-primary text-base">link</span>
-                  <span>{language === 'ar' ? 'رابط الـ Webhook المباشر (لـ MacroDroid)' : 'Direct Webhook URL (for MacroDroid)'}</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const url = `${window.location.origin}/api/v1/devices/webhook-ingest?token=${pairingResult.pairingCode}`;
-                    navigator.clipboard.writeText(url);
-                    setCopiedCode(true);
-                    setTimeout(() => setCopiedCode(false), 2000);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary/90 transition-all cursor-pointer flex items-center gap-1"
-                >
-                  <span className="material-symbols-outlined text-xs">content_copy</span>
-                  <span>{copiedCode ? (language === 'ar' ? 'تم النسخ!' : 'Copied!') : (language === 'ar' ? 'نسخ الرابط' : 'Copy URL')}</span>
-                </button>
+            <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant space-y-2.5 text-xs text-on-surface-variant">
+              <div className="flex items-center gap-1.5 font-bold text-on-surface">
+                <span className="material-symbols-outlined text-primary text-base">shield</span>
+                <span>{language === 'ar' ? 'إعداد آمن عبر تطبيق Sarraf Adapter' : 'Secure setup through the Sarraf Adapter'}</span>
               </div>
-              <div className="p-2.5 rounded-lg bg-surface-container-lowest font-mono text-xs text-primary break-all border border-outline-variant/60 select-all">
-                {`${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1/devices/webhook-ingest?token=${pairingResult.pairingCode}`}
-              </div>
-            </div>
-
-            {/* Platform Instructions */}
-            <div className="space-y-2">
-              <h4 className="text-label-md font-bold text-on-surface">
-                {language === 'ar' ? 'خطوات التفعيل على هاتف الاستقبال (MacroDroid):' : 'Terminal Activation Steps (MacroDroid):'}
-              </h4>
-              <div className="text-xs text-on-surface-variant space-y-2 bg-surface-container-lowest p-3.5 rounded-xl border border-outline-variant/60">
-                {adapterType === 'macrodroid' ? (
-                  <>
-                    <p className="font-semibold text-on-surface">
-                      {language === 'ar' ? '1. في تطبيق MacroDroid: اضغط على إضافة ماكرو (+ Add Macro)' : '1. In MacroDroid: Tap Add Macro (+)'}
-                    </p>
-                    <p>
-                      {language === 'ar'
-                        ? '2. المشغلات (Triggers - أحمر): اختر Calls / SMS -> SMS Received -> Any Number.'
-                        : '2. Triggers (Red): Choose Calls / SMS -> SMS Received -> Any Number.'}
-                    </p>
-                    <p>
-                      {language === 'ar'
-                        ? '3. الإجراءات (Actions - أزرق): اختر Connectivity -> HTTP Request -> Method: POST والصق الرابط المنسوخ أعلاه.'
-                        : '3. Actions (Blue): Choose Connectivity -> HTTP Request -> Method: POST and paste the Webhook URL above.'}
-                    </p>
-                    <div className="bg-surface-container-low p-3 rounded-lg border border-outline-variant/40 space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-on-surface">
-                          {language === 'ar' ? 'محتوى الطلب (Request Body - JSON):' : 'Request Body (JSON):'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const bodyJson = '{"sms_message": "{sms_message}", "sms_number": "{sms_number}", "battery": "{battery}", "device_model": "{device_model}", "power": "{power}"}';
-                            navigator.clipboard.writeText(bodyJson);
-                            setCopiedBody(true);
-                            setTimeout(() => setCopiedBody(false), 2000);
-                          }}
-                          className="px-2 py-0.5 rounded bg-surface-container border border-outline-variant text-[10px] font-semibold text-primary hover:bg-surface-container-high transition-all flex items-center gap-1 cursor-pointer"
-                        >
-                          <span className="material-symbols-outlined text-[12px]">{copiedBody ? 'check' : 'content_copy'}</span>
-                          <span>{copiedBody ? (language === 'ar' ? 'تم النسخ!' : 'Copied!') : (language === 'ar' ? 'نسخ النص' : 'Copy JSON')}</span>
-                        </button>
-                      </div>
-                      <code className="text-[11px] font-mono text-emerald-400 select-all block break-all">
-                        {`{"sms_message": "{sms_message}", "sms_number": "{sms_number}", "battery": "{battery}", "device_model": "{device_model}", "power": "{power}"}`}
-                      </code>
-                    </div>
-                    <p className="text-[11px] text-amber-400/90 font-medium">
-                      {language === 'ar'
-                        ? '⚠️ تأكد من تفعيل صلاحية "قراءة الرسائل والإشعارات" واستثناء MacroDroid من "توفير البطارية".'
-                        : '⚠️ Make sure to grant SMS/Notification permissions and exclude MacroDroid from battery optimization.'}
-                    </p>
-                  </>
-                ) : (
-                  <ol className="list-decimal list-inside space-y-1">
-                    <li>{language === 'ar' ? `كود الربط المعتمد: ${pairingResult.pairingCode}` : `Pairing Code: ${pairingResult.pairingCode}`}</li>
-                    <li>{language === 'ar' ? 'عيّن إرسال محتوى الرسائل إلى نقطة الويب هوك.' : 'Dispatch SMS contents to the webhook.'}</li>
-                  </ol>
-                )}
-              </div>
+              <ol className="list-decimal list-inside space-y-1.5">
+                <li>{language === 'ar' ? 'افتح تطبيق Sarraf Adapter على هاتف الاستقبال واختر ربط جهاز.' : 'Open the Sarraf Adapter on the capture phone and choose Pair device.'}</li>
+                <li>{language === 'ar' ? 'أدخل هذا الرمز مرة واحدة. سيستلم التطبيق بيانات الاعتماد المخصصة للجهاز.' : 'Enter this one-time code. The adapter will receive device-scoped credentials.'}</li>
+                <li>{language === 'ar' ? 'يوقّع التطبيق كل رسالة قبل إرسالها إلى المنصة؛ لا تستخدم روابط تحتوي على كود الاقتران.' : 'The adapter signs every message before sending it to the platform; do not use URLs containing a pairing code.'}</li>
+              </ol>
+              <p className="pt-1 text-[11px]">
+                {language === 'ar'
+                  ? 'فعّل صلاحية قراءة الإشعارات أو الرسائل واستثنِ التطبيق من توفير البطارية حسب نظام الهاتف.'
+                  : 'Grant the required notification/SMS permission and exempt the adapter from battery optimization for this phone.'}
+              </p>
             </div>
 
             <div className="pt-2 flex justify-end">

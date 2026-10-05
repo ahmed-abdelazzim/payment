@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Workspace, User, TeamMember, CurrentSubscription } from '../types';
+import { apiFetch } from '../api';
 
 interface SettingsViewProps {
   workspace: Workspace;
@@ -41,40 +42,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [issuedInvite, setIssuedInvite] = useState<{
-    token: string;
     email: string;
     role: string;
-    link: string;
     expiresAt: string;
   } | null>(null);
   const [pendingInvitations, setPendingInvitations] = useState<any[]>([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
-  const [copiedToken, setCopiedToken] = useState<string | null>(null);
 
   // Integrations state (Clean initialized, loaded from server)
   const [telegramBotToken, setTelegramBotToken] = useState('');
   const [telegramChatId, setTelegramChatId] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
+  const [telegramBotTokenConfigured, setTelegramBotTokenConfigured] = useState(false);
+  const [webhookSecretConfigured, setWebhookSecretConfigured] = useState(false);
   const [savingIntegrations, setSavingIntegrations] = useState(false);
   const [integrationsSaved, setIntegrationsSaved] = useState(false);
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('/api/v1/organizations/settings', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
-      });
+      const res = await apiFetch('/api/v1/organizations/settings');
       if (res.ok) {
         const data = await res.json();
         if (data.name) setOrgName(data.name);
         if (data.nameAr) setOrgNameAr(data.nameAr);
         if (data.defaultTimezone) setTimezone(data.defaultTimezone);
-        if (data.telegramBotToken) setTelegramBotToken(data.telegramBotToken);
+        setTelegramBotTokenConfigured(Boolean(data.telegramBotTokenConfigured));
         if (data.telegramChatId) setTelegramChatId(data.telegramChatId);
         if (data.webhookUrl) setWebhookUrl(data.webhookUrl);
-        if (data.webhookSecret) setWebhookSecret(data.webhookSecret);
+        setWebhookSecretConfigured(Boolean(data.webhookSecretConfigured));
       }
     } catch {}
   };
@@ -82,11 +78,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const fetchMembers = async () => {
     setLoadingMembers(true);
     try {
-      const res = await fetch('/api/v1/organizations/members', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
-      });
+      const res = await apiFetch('/api/v1/organizations/members');
       if (res.ok) {
         const data = await res.json();
         setMembers(data);
@@ -102,11 +94,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!['owner', 'admin'].includes(currentUser.role)) return;
     setLoadingInvitations(true);
     try {
-      const res = await fetch('/api/v1/organizations/members/invitations', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
-      });
+      const res = await apiFetch('/api/v1/organizations/members/invitations');
       if (res.ok) {
         const data = await res.json();
         setPendingInvitations(Array.isArray(data) ? data : []);
@@ -119,11 +107,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const fetchSubscription = async () => {
     setLoadingSub(true);
     try {
-      const res = await fetch('/api/v1/subscriptions/current', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
-        },
-      });
+      const res = await apiFetch('/api/v1/subscriptions/current');
       if (res.ok) {
         const data = await res.json();
         setCurrentSub(data);
@@ -153,11 +137,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setOrgSaveSuccess(false);
 
     try {
-      const res = await fetch('/api/v1/organizations/settings', {
+      const res = await apiFetch('/api/v1/organizations/settings', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
         },
         body: JSON.stringify({
           name: orgName,
@@ -184,11 +167,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setInviteError(null);
 
     try {
-      const res = await fetch('/api/v1/organizations/members/invite', {
+      const res = await apiFetch('/api/v1/organizations/members/invite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
         },
         body: JSON.stringify({
           email: inviteEmail,
@@ -203,10 +185,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
 
       setIssuedInvite({
-        token: data.inviteToken,
         email: data.email,
         role: data.role,
-        link: `${window.location.origin}/invite/${data.inviteToken}`,
         expiresAt: data.expiresAt,
       });
       setInviteEmail('');
@@ -225,11 +205,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setSavingIntegrations(true);
     setIntegrationsSaved(false);
     try {
-      const res = await fetch('/api/v1/organizations/settings', {
+      const res = await apiFetch('/api/v1/organizations/settings', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
         },
         body: JSON.stringify({
           telegramBotToken,
@@ -239,6 +218,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         }),
       });
       if (res.ok) {
+        setTelegramBotToken('');
+        setWebhookSecret('');
+        setTelegramBotTokenConfigured(Boolean(telegramBotToken) || telegramBotTokenConfigured);
+        setWebhookSecretConfigured(Boolean(webhookSecret) || webhookSecretConfigured);
         setIntegrationsSaved(true);
         setTimeout(() => setIntegrationsSaved(false), 3500);
       }
@@ -618,7 +601,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </h3>
               <div className="border border-outline-variant rounded-xl overflow-hidden divide-y divide-outline-variant">
                 {pendingInvitations.map((inv) => (
-                  <div key={inv.token} className="p-3.5 bg-surface-container-low flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div key={`${inv.email}-${inv.expiresAt}`} className="p-3.5 bg-surface-container-low flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-on-surface text-body-sm font-code-num">{inv.email}</span>
@@ -630,29 +613,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         {language === 'ar' ? 'تنتهي الصلاحية في:' : 'Expires:'} {new Date(inv.expiresAt).toLocaleDateString()}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const link = `${window.location.origin}/invite/${inv.token}`;
-                        navigator.clipboard.writeText(link);
-                        setCopiedToken(inv.token);
-                        setTimeout(() => setCopiedToken(null), 2500);
-                      }}
-                      className="self-start sm:self-auto px-3 py-1.5 rounded-lg border border-outline-variant bg-surface-container-lowest hover:bg-surface-container text-label-sm font-medium text-on-surface flex items-center gap-1.5 transition-all"
-                    >
-                      <span className="material-symbols-outlined text-sm">
-                        {copiedToken === inv.token ? 'check' : 'content_copy'}
-                      </span>
-                      <span>
-                        {copiedToken === inv.token
-                          ? language === 'ar'
-                            ? 'تم نسخ الرابط!'
-                            : 'Link Copied!'
-                          : language === 'ar'
-                          ? 'نسخ رابط الدعوة'
-                          : 'Copy Invite Link'}
-                      </span>
-                    </button>
+                    <span className="self-start sm:self-auto text-label-xs text-on-surface-variant">
+                      {language === 'ar' ? 'تم إرسال رابط آمن إلى البريد.' : 'A secure link was sent by email.'}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -851,6 +814,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           )}
 
+          {['owner', 'admin'].includes(currentUser.role) ? (
           <form onSubmit={handleSaveIntegrations} className="space-y-6">
             {/* Telegram Configuration */}
             <div className="space-y-3 p-4 rounded-xl bg-surface-container-low border border-outline-variant/60">
@@ -870,11 +834,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     {language === 'ar' ? 'رمز البوت (Bot Token)' : 'Telegram Bot Token'}
                   </label>
                   <input
-                    type="text"
+                    type="password"
                     value={telegramBotToken}
                     onChange={(e) => setTelegramBotToken(e.target.value)}
+                    placeholder={telegramBotTokenConfigured ? (language === 'ar' ? 'تم الحفظ — أدخل قيمة جديدة للاستبدال' : 'Configured — enter a new value to replace') : ''}
+                    autoComplete="new-password"
                     className="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-lowest font-code-num text-body-sm focus:ring-2 focus:ring-primary focus:outline-none"
                   />
+                  <p className="mt-1 text-label-xs text-on-surface-variant">
+                    {language === 'ar' ? 'لأمان الحساب، لا يمكن عرض الرمز المحفوظ مرة أخرى.' : 'For account security, a saved token cannot be viewed again.'}
+                  </p>
                 </div>
                 <div>
                   <label className="block text-label-sm text-on-surface font-medium mb-1">
@@ -919,11 +888,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     {language === 'ar' ? 'مفتاح توقيع الويب هوك (Signing Secret)' : 'Webhook Signing Secret'}
                   </label>
                   <input
-                    type="text"
-                    readOnly
+                    type="password"
                     value={webhookSecret}
+                    onChange={(e) => setWebhookSecret(e.target.value)}
+                    placeholder={webhookSecretConfigured ? (language === 'ar' ? 'تم الحفظ — أدخل قيمة جديدة للاستبدال' : 'Configured — enter a new value to replace') : ''}
+                    autoComplete="new-password"
                     className="w-full px-3 py-2 rounded-lg border border-outline-variant bg-surface-container-low font-code-num text-body-sm"
                   />
+                  <p className="mt-1 text-label-xs text-on-surface-variant">
+                    {language === 'ar' ? 'أدخل مفتاحاً جديداً فقط إذا أردت استبدال المفتاح الحالي.' : 'Enter a new value only when replacing the current signing secret.'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -943,6 +917,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
           </form>
+          ) : (
+            <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant text-body-sm text-on-surface-variant">
+              {language === 'ar'
+                ? 'إعدادات التكامل متاحة للمالك أو المشرف فقط.'
+                : 'Integration configuration is available only to workspace owners and administrators.'}
+            </div>
+          )}
         </div>
       )}
 
@@ -967,40 +948,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant/60 space-y-3">
                   <div className="flex items-center gap-2 text-primary font-bold text-title-sm">
                     <span className="material-symbols-outlined">mark_email_read</span>
-                    <span>{language === 'ar' ? 'تم إنشاء رابط الدعوة بنجاح' : 'Invitation Link Created!'}</span>
+                    <span>{language === 'ar' ? 'تم إرسال الدعوة بنجاح' : 'Invitation sent successfully'}</span>
                   </div>
                   <p className="text-body-sm text-on-surface-variant">
                     {language === 'ar'
-                      ? `تمت دعوة ${issuedInvite.email} بصلاحية ${issuedInvite.role}. انسخ الرابط التالي وأرسله له لتأكيد الانضمام:`
-                      : `Invited ${issuedInvite.email} as ${issuedInvite.role}. Share this one-time link with your colleague:`}
+                      ? `تمت دعوة ${issuedInvite.email} بصلاحية ${issuedInvite.role}. أرسلنا رابطاً آمناً إلى بريده لتأكيد الانضمام.`
+                      : `Invited ${issuedInvite.email} as ${issuedInvite.role}. We sent a secure acceptance link to their email address.`}
                   </p>
-                  <div className="p-3 rounded-lg bg-surface-container-lowest border border-outline-variant font-code-num text-body-sm break-all text-on-surface select-all">
-                    {issuedInvite.link}
-                  </div>
-                  <div className="flex items-center justify-between text-label-xs text-on-surface-variant">
-                    <span>{language === 'ar' ? 'الصلاحية: 7 أيام' : 'Valid for 7 days'}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(issuedInvite.link);
-                        setCopiedToken(issuedInvite.token);
-                        setTimeout(() => setCopiedToken(null), 2500);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-primary text-on-primary font-semibold text-label-sm flex items-center gap-1.5 shadow-xs hover:bg-primary/90 transition-all"
-                    >
-                      <span className="material-symbols-outlined text-sm">
-                        {copiedToken === issuedInvite.token ? 'check' : 'content_copy'}
-                      </span>
-                      <span>
-                        {copiedToken === issuedInvite.token
-                          ? language === 'ar'
-                            ? 'تم النسخ!'
-                            : 'Copied!'
-                          : language === 'ar'
-                          ? 'نسخ الرابط'
-                          : 'Copy Link'}
-                      </span>
-                    </button>
+                  <div className="text-label-xs text-on-surface-variant">
+                    {language === 'ar'
+                      ? `تنتهي صلاحية الدعوة في ${new Date(issuedInvite.expiresAt).toLocaleDateString('ar-EG')}.`
+                      : `The invitation expires on ${new Date(issuedInvite.expiresAt).toLocaleDateString('en-US')}.`}
                   </div>
                 </div>
 

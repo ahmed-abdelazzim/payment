@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CurrentSubscription, SubscriptionPlan, SubscriptionOrder, SubscriptionReceipt } from '../types';
 import { ReceiptModal } from './ReceiptModal';
+import { apiFetch } from '../api';
 
 interface SubscriptionsViewProps {
   language: 'en' | 'ar';
@@ -39,21 +40,12 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   // Load all plans, current subscription, and orders
   const loadSubscriptionData = async () => {
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     try {
       setLoading(true);
       const [plansRes, currentRes, ordersRes] = await Promise.all([
-        fetch('/api/v1/subscriptions/plans', {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch('/api/v1/subscriptions/current', {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch('/api/v1/subscriptions/orders', {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
+        apiFetch('/api/v1/subscriptions/plans'),
+        apiFetch('/api/v1/subscriptions/current'),
+        apiFetch('/api/v1/subscriptions/orders'),
       ]);
 
       if (plansRes.ok) {
@@ -96,16 +88,12 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   // 1. Create a new subscription order
   const handleSelectPlan = async (plan: SubscriptionPlan) => {
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     setIsSubmittingOrder(true);
     try {
-      const res = await fetch('/api/v1/subscriptions/orders', {
+      const res = await apiFetch('/api/v1/subscriptions/orders', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ planId: plan.id }),
       });
@@ -145,16 +133,12 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
       return;
     }
 
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     setIsSubmittingReport(true);
     try {
-      const res = await fetch(`/api/v1/subscriptions/orders/${activeOrder.id}/report-payment`, {
+      const res = await apiFetch(`/api/v1/subscriptions/orders/${activeOrder.id}/report-payment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           reportedTransferRef: transferRef.trim(),
@@ -188,13 +172,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
 
   // 3. View official receipt
   const handleViewReceipt = async (orderId: string) => {
-    const token = localStorage.getItem('sarraf_session_token');
-    if (!token) return;
-
     try {
-      const res = await fetch(`/api/v1/subscriptions/receipts/${orderId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await apiFetch(`/api/v1/subscriptions/receipts/${orderId}`);
       if (res.ok) {
         const receipt = await res.json();
         setSelectedReceipt(receipt);

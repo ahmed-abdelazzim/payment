@@ -1,5 +1,7 @@
 # Database Architecture & Relational Schema (PostgreSQL)
 
+> **حالة:** هذا تصميم وترحيل PostgreSQL مستهدف، وليس محرك قاعدة البيانات الذي يشغّل الخادم في هذه النسخة. التشغيل المحلي الحالي يستعمل SQLite كجسر أحادي النسخة مع مسار بيانات صريح في الإنتاج. لا تدّعِ RLS أو تعدد النسخ قبل تشغيل ترحيلات PostgreSQL الفعلية والتحقق منها.
+
 ## 1. Relational Entity-Relationship Model
 
 ```

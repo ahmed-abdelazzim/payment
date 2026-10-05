@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ProviderType, ProviderRail } from '../types';
+import { apiFetch } from '../api';
 
 interface AddSourceModalProps {
   isOpen: boolean;
@@ -37,11 +38,10 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch('/api/v1/sources', {
+      const res = await apiFetch('/api/v1/sources', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('sarraf_session_token') || ''}`,
         },
         body: JSON.stringify({
           provider,
@@ -66,7 +66,8 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
       };
 
       onSourceAdded({
-        id: provider,
+        id: data.id,
+        provider: data.provider || provider,
         name: friendlyName,
         sharePercentage: 100,
         volume: 0,

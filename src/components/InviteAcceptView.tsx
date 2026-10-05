@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { User, Workspace } from '../types';
+import { apiFetch } from '../api';
 
 interface InviteAcceptViewProps {
   token: string;
   language: 'en' | 'ar';
-  onSuccess: (token: string, user: User, org: Workspace) => void;
+  onSuccess: (user: User, org: Workspace) => void;
   onNavigateHome: () => void;
   onNavigateLogin: () => void;
 }
@@ -20,6 +21,7 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [invite, setInvite] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasSession, setHasSession] = useState(false);
 
   // Form fields for new user registration
   const [fullName, setFullName] = useState('');
@@ -28,7 +30,7 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
   useEffect(() => {
     const fetchInviteDetails = async () => {
       try {
-        const res = await fetch(`/api/v1/organizations/members/invitations/${encodeURIComponent(token)}`);
+        const res = await apiFetch(`/api/v1/organizations/members/invitations/${encodeURIComponent(token)}`);
         const data = await res.json();
 
         if (res.ok) {
@@ -68,10 +70,15 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
     fetchInviteDetails();
   }, [token, language]);
 
+  useEffect(() => {
+    apiFetch('/api/v1/auth/me')
+      .then((res) => setHasSession(res.ok))
+      .catch(() => setHasSession(false));
+  }, []);
+
   // Handle accepting with existing active session
   const handleAcceptWithExistingSession = async () => {
-    const activeToken = localStorage.getItem('sarraf_session_token');
-    if (!activeToken) {
+    if (!hasSession) {
       onNavigateLogin();
       return;
     }
@@ -80,11 +87,10 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
     setError(null);
 
     try {
-      const res = await fetch('/api/v1/organizations/members/invitations/accept', {
+      const res = await apiFetch('/api/v1/organizations/members/invitations/accept', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${activeToken}`,
         },
         body: JSON.stringify({ token }),
       });
@@ -95,13 +101,10 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
       }
 
       // Reload me
-      const meRes = await fetch('/api/v1/auth/me', {
-        headers: { Authorization: `Bearer ${activeToken}` },
-      });
+      const meRes = await apiFetch('/api/v1/auth/me');
       if (meRes.ok) {
         const meData = await meRes.json();
         onSuccess(
-          activeToken,
           meData.user,
           {
             id: meData.organization.id,
@@ -136,7 +139,7 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
     setError(null);
 
     try {
-      const res = await fetch('/api/v1/organizations/members/invitations/register-and-accept', {
+      const res = await apiFetch('/api/v1/organizations/members/invitations/register-and-accept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -151,9 +154,7 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
         throw new Error(data.message || (language === 'ar' ? 'فشل إتمام الانضمام' : 'Failed to complete registration'));
       }
 
-      localStorage.setItem('sarraf_session_token', data.token);
       onSuccess(
-        data.token,
         data.user,
         {
           id: data.organization.id,
@@ -170,8 +171,6 @@ export const InviteAcceptView: React.FC<InviteAcceptViewProps> = ({
       setSubmitting(false);
     }
   };
-
-  const hasSession = Boolean(localStorage.getItem('sarraf_session_token'));
 
   const roleNameMap: Record<string, { ar: string; en: string }> = {
     admin: { ar: 'مدير نظام (Admin)', en: 'Admin' },

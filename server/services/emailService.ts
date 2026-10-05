@@ -91,10 +91,10 @@ export class EmailService {
           subject,
           html,
         });
-        console.log(`[EmailService] ✅ Email dispatched via SMTP to ${to} (${subject})`);
+        console.log('[EmailService] Email dispatched via SMTP.');
         return { success: true, link: actionLink, provider: 'smtp' };
       } catch (err: any) {
-        console.error(`[EmailService] ❌ SMTP send failed:`, err.message);
+        console.error('[EmailService] SMTP send failed.');
         return { success: false, link: actionLink, provider: 'smtp', error: err.message };
       }
     }
@@ -103,22 +103,16 @@ export class EmailService {
     if (process.env.RESEND_API_KEY) {
       try {
         await sendViaResend(to, subject, html);
-        console.log(`[EmailService] ✅ Email dispatched via Resend to ${to} (${subject})`);
+        console.log('[EmailService] Email dispatched via Resend.');
         return { success: true, link: actionLink, provider: 'resend' };
       } catch (err: any) {
-        console.error(`[EmailService] ❌ Resend dispatch failed:`, err.message);
+        console.error('[EmailService] Resend dispatch failed.');
         return { success: false, link: actionLink, provider: 'resend', error: err.message };
       }
     }
 
-    // 3. Fallback / Simulation Mode (prints link clearly to server logs)
-    console.log(`\n================================================================`);
-    console.log(`[EmailService] ✉️  EMAIL DISPATCH (Simulation Mode — No SMTP configured)`);
-    console.log(`To: ${to}`);
-    console.log(`Subject: ${subject}`);
-    console.log(`Action Link: ${actionLink}`);
-    console.log(`Tip: Add SMTP_HOST, SMTP_USER, SMTP_PASS in your environment to send real emails.`);
-    console.log(`================================================================\n`);
+    // Do not expose recipient data or one-time action links in logs. They are credentials.
+    console.warn('[EmailService] Email was not sent because no mail provider is configured.');
 
     return { success: false, link: actionLink, provider: 'simulated', error: 'SMTP_NOT_CONFIGURED' };
   }

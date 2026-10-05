@@ -1,4 +1,17 @@
 import { getDatabase } from '../db';
+import { toMinor, fromMinor } from '../money';
+
+const CAIRO_TIME_ZONE = 'Africa/Cairo';
+
+export type LimitPeriod = 'daily' | 'monthly';
+export type LimitAlertLevel = 'warning' | 'critical' | 'cap_exceeded';
+
+export interface LimitAlert {
+  periodType: LimitPeriod;
+  level: LimitAlertLevel;
+  percentage: number;
+  thresholdPercent?: number;
+}
 
 export interface LimitCheckResult {
   paymentSourceId: string;
@@ -8,108 +21,356 @@ export interface LimitCheckResult {
   monthlyIntake: number;
   monthlyCap: number;
   monthlyPercentage: number;
-  alertTriggered?: '80%' | '90%' | 'cap_exceeded';
+  /** Backwards-compatible primary alert for callers that show one message. */
+  alertTriggered?: string;
+  /** Every alert generated for this update, including daily and monthly alerts. */
+  alertsTriggered: LimitAlert[];
+  periodKeys: {
+    daily: string;
+    monthly: string;
+    timeZone: typeof CAIRO_TIME_ZONE;
+  };
+}
+
+export interface LimitAlertThresholds {
+  warningThreshold?: number;
+  criticalThreshold?: number;
+}
+
+interface ResolvedAlertThresholds {
+  warningThreshold: number;
+  criticalThreshold: number;
+}
+
+interface UsageRow {
+  accumulated_intake_minor: number;
+  regulatory_cap_minor: number;
+  is_alert_80_dispatched: number;
+  is_alert_90_dispatched: number;
+}
+
+const toEgp = fromMinor;
+
+function percentageOf(intakeMinor: number, capMinor: number): number {
+  if (capMinor <= 0) {
+    throw new Error('INVALID_LIMIT_CAP');
+  }
+
+  return Math.floor((intakeMinor * 100 + Math.floor(capMinor / 2)) / capMinor);
+}
+
+function parseThreshold(value: number | string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 100) {
+    throw new Error(`INVALID_${name}_THRESHOLD`);
+  }
+
+  return parsed;
+}
+
+function resolveThresholds(options?: LimitAlertThresholds): ResolvedAlertThresholds {
+  const warningThreshold = parseThreshold(
+    options?.warningThreshold ?? process.env.LIMIT_ALERT_WARNING_PERCENT,
+    80,
+    'WARNING'
+  );
+  const criticalThreshold = parseThreshold(
+    options?.criticalThreshold ?? process.env.LIMIT_ALERT_CRITICAL_PERCENT,
+    90,
+    'CRITICAL'
+  );
+
+  if (warningThreshold >= criticalThreshold) {
+    throw new Error('INVALID_LIMIT_ALERT_THRESHOLD_ORDER');
+  }
+
+  return { warningThreshold, criticalThreshold };
+}
+
+/**
+ * Builds period keys according to the merchant's contractual operating time
+ * zone. UTC date keys split Cairo business days around midnight incorrectly.
+ */
+export function getCairoPeriodKeys(eventTime?: string | Date): { daily: string; monthly: string } {
+  const date = eventTime instanceof Date ? eventTime : eventTime ? new Date(eventTime) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    throw new Error('INVALID_LIMIT_EVENT_TIME');
+  }
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: CAIRO_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const valueFor = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value || '';
+  const year = valueFor('year');
+  const month = valueFor('month');
+  const day = valueFor('day');
+
+  if (!year || !month || !day) {
+    throw new Error('CANNOT_RESOLVE_CAIRO_PERIOD');
+  }
+
+  return { daily: `${year}-${month}-${day}`, monthly: `${year}-${month}` };
 }
 
 export class LimitEngine {
   /**
-   * Records a confirmed transaction amount against the payment source's daily and monthly capacity.
+   * Records a confirmed transaction against the actual source's daily and
+   * monthly capacity. `amount` is in EGP and converted exactly to piastres.
    */
-  static recordTurnover(organizationId: string, paymentSourceId: string, amount: number, eventTimeCairo?: string): LimitCheckResult {
+  static recordTurnover(
+    organizationId: string,
+    paymentSourceId: string,
+    amount: number,
+    eventTimeCairo?: string,
+    options?: LimitAlertThresholds
+  ): LimitCheckResult {
     const db = getDatabase();
+    const amountMinor = toMinor(amount);
+    db.exec('BEGIN IMMEDIATE;');
+    try {
+      const result = this.recordTurnoverInTransaction(
+        organizationId,
+        paymentSourceId,
+        amountMinor,
+        eventTimeCairo,
+        options
+      );
+      db.exec('COMMIT;');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  /**
+   * Records source usage while the caller already owns the database write
+   * transaction.  Reconciliation uses this so the ledger, usage counters, and
+   * alert jobs either all commit or all roll back together.
+   *
+   * @param amountMinor confirmed amount in integer piastres
+   */
+  static recordTurnoverInTransaction(
+    organizationId: string,
+    paymentSourceId: string,
+    amountMinor: number,
+    eventTimeCairo?: string,
+    options?: LimitAlertThresholds
+  ): LimitCheckResult {
+    const db = getDatabase();
+    if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+      throw new Error('INVALID_LIMIT_AMOUNT');
+    }
+    if (amountMinor === 0) {
+      throw new Error('ZERO_TURNOVER_AMOUNT');
+    }
 
     const source = db.prepare(`
-      SELECT id, friendly_name, daily_turnover_limit, monthly_turnover_limit
+      SELECT id, friendly_name, daily_turnover_limit_minor, monthly_turnover_limit_minor
       FROM payment_sources
       WHERE id = ? AND organization_id = ?
     `).get(paymentSourceId, organizationId) as any;
 
     if (!source) {
-      return {
-        paymentSourceId,
-        dailyIntake: 0,
-        dailyCap: 60000,
-        dailyPercentage: 0,
-        monthlyIntake: 0,
-        monthlyCap: 200000,
-        monthlyPercentage: 0,
-      };
+      // Never silently apply an unrelated default limit to a real payment.
+      throw new Error('PAYMENT_SOURCE_NOT_FOUND');
     }
 
-    const now = eventTimeCairo ? new Date(eventTimeCairo) : new Date();
-    // Daily key: YYYY-MM-DD
-    const dayKey = now.toISOString().split('T')[0];
-    // Monthly key: YYYY-MM
-    const monthKey = dayKey.substring(0, 7);
-
-    // 1. Upsert Daily Record
-    db.prepare(`
-      INSERT INTO financial_limit_usage (id, payment_source_id, period_type, period_key, accumulated_intake, regulatory_cap)
-      VALUES (?, ?, 'daily', ?, ?, ?)
-      ON CONFLICT(payment_source_id, period_type, period_key) DO UPDATE SET
-        accumulated_intake = accumulated_intake + excluded.accumulated_intake,
-        updated_at = datetime('now')
-    `).run(`lim_d_${paymentSourceId}_${dayKey}`, paymentSourceId, dayKey, amount, source.daily_turnover_limit);
-
-    // 2. Upsert Monthly Record
-    db.prepare(`
-      INSERT INTO financial_limit_usage (id, payment_source_id, period_type, period_key, accumulated_intake, regulatory_cap)
-      VALUES (?, ?, 'monthly', ?, ?, ?)
-      ON CONFLICT(payment_source_id, period_type, period_key) DO UPDATE SET
-        accumulated_intake = accumulated_intake + excluded.accumulated_intake,
-        updated_at = datetime('now')
-    `).run(`lim_m_${paymentSourceId}_${monthKey}`, paymentSourceId, monthKey, amount, source.monthly_turnover_limit);
-
-    // 3. Check for alerts
-    const dailyRow = db.prepare(`
-      SELECT accumulated_intake, regulatory_cap, is_alert_80_dispatched, is_alert_90_dispatched
-      FROM financial_limit_usage
-      WHERE payment_source_id = ? AND period_type = 'daily' AND period_key = ?
-    `).get(paymentSourceId, dayKey) as any;
-
-    const dailyIntake = dailyRow.accumulated_intake;
-    const dailyCap = dailyRow.regulatory_cap;
-    const dailyPercentage = Math.round((dailyIntake / dailyCap) * 100);
-
-    let alertTriggered: '80%' | '90%' | 'cap_exceeded' | undefined;
-
-    if (dailyPercentage >= 90 && !dailyRow.is_alert_90_dispatched) {
-      alertTriggered = '90%';
-      db.prepare(`
-        UPDATE financial_limit_usage SET is_alert_90_dispatched = 1 WHERE payment_source_id = ? AND period_type = 'daily' AND period_key = ?
-      `).run(paymentSourceId, dayKey);
-
-      // Enqueue notification outbox job
-      db.prepare(`
-        INSERT INTO outbox_jobs (id, organization_id, job_type, payload)
-        VALUES (?, ?, 'limit_alert', ?)
-      `).run(
-        `alert_${Date.now()}`,
-        organizationId,
-        JSON.stringify({
-          source_name: source.friendly_name,
-          intake: dailyIntake,
-          cap: dailyCap,
-          threshold: '90%',
-          action_recommended: 'Promote alternate warm wallet as default for new instructions',
-        })
-      );
-    } else if (dailyPercentage >= 80 && !dailyRow.is_alert_80_dispatched) {
-      alertTriggered = '80%';
-      db.prepare(`
-        UPDATE financial_limit_usage SET is_alert_80_dispatched = 1 WHERE payment_source_id = ? AND period_type = 'daily' AND period_key = ?
-      `).run(paymentSourceId, dayKey);
+    const dailyCapMinor = Number(source.daily_turnover_limit_minor);
+    const monthlyCapMinor = Number(source.monthly_turnover_limit_minor);
+    if (!(dailyCapMinor > 0) || !(monthlyCapMinor > 0)) {
+      throw new Error('INVALID_LIMIT_CAP');
     }
+
+    const periodKeys = getCairoPeriodKeys(eventTimeCairo);
+    const thresholds = resolveThresholds(options);
+
+    const daily = this.upsertUsage({
+      paymentSourceId,
+      periodType: 'daily',
+      periodKey: periodKeys.daily,
+      amountMinor,
+      capMinor: dailyCapMinor,
+    });
+    const monthly = this.upsertUsage({
+      paymentSourceId,
+      periodType: 'monthly',
+      periodKey: periodKeys.monthly,
+      amountMinor,
+      capMinor: monthlyCapMinor,
+    });
+
+    const alerts = [
+      ...this.dispatchAlerts({ organizationId, source, usage: daily, thresholds }),
+      ...this.dispatchAlerts({ organizationId, source, usage: monthly, thresholds }),
+    ];
+
+    const primaryAlert = alerts.find((alert) => alert.level === 'cap_exceeded')
+      || alerts.find((alert) => alert.level === 'critical')
+      || alerts.find((alert) => alert.level === 'warning');
 
     return {
       paymentSourceId,
-      dailyIntake,
-      dailyCap,
-      dailyPercentage,
-      monthlyIntake: dailyIntake * 1.5,
-      monthlyCap: source.monthly_turnover_limit,
-      monthlyPercentage: Math.round(((dailyIntake * 1.5) / source.monthly_turnover_limit) * 100),
-      alertTriggered,
+      dailyIntake: toEgp(daily.currentMinor),
+      dailyCap: toEgp(daily.capMinor),
+      dailyPercentage: daily.currentPercentage,
+      monthlyIntake: toEgp(monthly.currentMinor),
+      monthlyCap: toEgp(monthly.capMinor),
+      monthlyPercentage: monthly.currentPercentage,
+      alertTriggered: primaryAlert
+        ? primaryAlert.level === 'cap_exceeded'
+          ? 'cap_exceeded'
+          : `${primaryAlert.thresholdPercent}%`
+        : undefined,
+      alertsTriggered: alerts,
+      periodKeys: { ...periodKeys, timeZone: CAIRO_TIME_ZONE },
     };
+  }
+
+  private static upsertUsage(params: {
+    paymentSourceId: string;
+    periodType: LimitPeriod;
+    periodKey: string;
+    amountMinor: number;
+    capMinor: number;
+  }): {
+    periodType: LimitPeriod;
+    periodKey: string;
+    previousPercentage: number;
+    currentPercentage: number;
+    currentMinor: number;
+    capMinor: number;
+    warningSent: boolean;
+    criticalSent: boolean;
+  } {
+    const db = getDatabase();
+    const existing = db.prepare(`
+      SELECT accumulated_intake_minor, regulatory_cap_minor, is_alert_80_dispatched, is_alert_90_dispatched
+      FROM financial_limit_usage
+      WHERE payment_source_id = ? AND period_type = ? AND period_key = ?
+    `).get(params.paymentSourceId, params.periodType, params.periodKey) as UsageRow | undefined;
+
+    const previousMinor = existing ? Number(existing.accumulated_intake_minor) : 0;
+    const currentMinor = previousMinor + params.amountMinor;
+    const previousPercentage = percentageOf(previousMinor, params.capMinor);
+    const currentPercentage = percentageOf(currentMinor, params.capMinor);
+
+    db.prepare(`
+      INSERT INTO financial_limit_usage (
+        id, payment_source_id, period_type, period_key, accumulated_intake_minor, regulatory_cap_minor,
+        is_alert_80_dispatched, is_alert_90_dispatched
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(payment_source_id, period_type, period_key) DO UPDATE SET
+        accumulated_intake_minor = excluded.accumulated_intake_minor,
+        regulatory_cap_minor = excluded.regulatory_cap_minor,
+        updated_at = datetime('now')
+    `).run(
+      `lim_${params.periodType}_${params.paymentSourceId}_${params.periodKey}`,
+      params.paymentSourceId,
+      params.periodType,
+      params.periodKey,
+      currentMinor,
+      params.capMinor,
+      existing?.is_alert_80_dispatched || 0,
+      existing?.is_alert_90_dispatched || 0
+    );
+
+    return {
+      periodType: params.periodType,
+      periodKey: params.periodKey,
+      previousPercentage,
+      currentPercentage,
+      currentMinor,
+      capMinor: params.capMinor,
+      warningSent: Boolean(existing?.is_alert_80_dispatched),
+      criticalSent: Boolean(existing?.is_alert_90_dispatched),
+    };
+  }
+
+  private static dispatchAlerts(params: {
+    organizationId: string;
+    source: { id: string; friendly_name: string };
+    usage: ReturnType<typeof LimitEngine.upsertUsage>;
+    thresholds: ResolvedAlertThresholds;
+  }): LimitAlert[] {
+    const db = getDatabase();
+    const alerts: LimitAlert[] = [];
+    const { usage, thresholds } = params;
+
+    if (usage.currentPercentage >= thresholds.warningThreshold && !usage.warningSent) {
+      db.prepare(`
+        UPDATE financial_limit_usage
+        SET is_alert_80_dispatched = 1, updated_at = datetime('now')
+        WHERE payment_source_id = ? AND period_type = ? AND period_key = ?
+      `).run(params.source.id, usage.periodType, usage.periodKey);
+      this.enqueueAlert(params.organizationId, params.source, usage, 'warning', thresholds.warningThreshold);
+      alerts.push({
+        periodType: usage.periodType,
+        level: 'warning',
+        percentage: usage.currentPercentage,
+        thresholdPercent: thresholds.warningThreshold,
+      });
+    }
+
+    if (usage.currentPercentage >= thresholds.criticalThreshold && !usage.criticalSent) {
+      db.prepare(`
+        UPDATE financial_limit_usage
+        SET is_alert_90_dispatched = 1, updated_at = datetime('now')
+        WHERE payment_source_id = ? AND period_type = ? AND period_key = ?
+      `).run(params.source.id, usage.periodType, usage.periodKey);
+      this.enqueueAlert(params.organizationId, params.source, usage, 'critical', thresholds.criticalThreshold);
+      alerts.push({
+        periodType: usage.periodType,
+        level: 'critical',
+        percentage: usage.currentPercentage,
+        thresholdPercent: thresholds.criticalThreshold,
+      });
+    }
+
+    if (usage.previousPercentage < 100 && usage.currentPercentage >= 100) {
+      this.enqueueAlert(params.organizationId, params.source, usage, 'cap_exceeded');
+      alerts.push({ periodType: usage.periodType, level: 'cap_exceeded', percentage: usage.currentPercentage });
+    }
+
+    return alerts;
+  }
+
+  private static enqueueAlert(
+    organizationId: string,
+    source: { id: string; friendly_name: string },
+    usage: ReturnType<typeof LimitEngine.upsertUsage>,
+    level: LimitAlertLevel,
+    thresholdPercent?: number
+  ): void {
+    const db = getDatabase();
+    const jobId = `limit_alert_${source.id}_${usage.periodType}_${usage.periodKey}_${level}`;
+    db.prepare(`
+      INSERT OR IGNORE INTO outbox_jobs (id, organization_id, job_type, payload)
+      VALUES (?, ?, 'limit_alert', ?)
+    `).run(
+      jobId,
+      organizationId,
+      JSON.stringify({
+        sourceId: source.id,
+        sourceName: source.friendly_name,
+        periodType: usage.periodType,
+        periodKey: usage.periodKey,
+        intake: toEgp(usage.currentMinor),
+        cap: toEgp(usage.capMinor),
+        percentage: usage.currentPercentage,
+        level,
+        thresholdPercent,
+        actionRecommended: level === 'cap_exceeded'
+          ? 'Pause new payment instructions for this source and switch to an approved alternate source.'
+          : 'Prepare an approved alternate payment source before this source reaches its cap.',
+      })
+    );
   }
 }

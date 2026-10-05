@@ -6,6 +6,7 @@ export interface AuthenticatedDeviceRequest extends Request {
   deviceContext?: {
     deviceId: string;
     organizationId: string;
+    paymentSourceId: string | null;
     adapterType: string;
     status: string;
   };
@@ -40,7 +41,7 @@ export function verifyDeviceSignature(req: AuthenticatedDeviceRequest, res: Resp
 
   // 2. Fetch Device & HMAC Secret
   const deviceRow = db.prepare(`
-    SELECT d.id, d.organization_id, d.adapter_type, d.status, c.hmac_secret, c.revoked_at
+    SELECT d.id, d.organization_id, d.payment_source_id, d.adapter_type, d.status, c.hmac_secret, c.revoked_at
     FROM devices d
     JOIN device_credentials c ON d.id = c.device_id
     WHERE d.id = ?
@@ -76,7 +77,22 @@ export function verifyDeviceSignature(req: AuthenticatedDeviceRequest, res: Resp
   }
 
   // 4. Compute Expected Canonical Signature
-  const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
+  // HMAC must cover the exact request bytes received by Express.  Re-serializing
+  // parsed JSON changes whitespace and key ordering and can make a signature
+  // attest to a different payload than the device actually sent.
+  const capturedRawBody = (req as any).rawBody;
+  if (process.env.NODE_ENV !== 'test' && typeof capturedRawBody !== 'string') {
+    res.status(400).json({
+      error: 'RAW_BODY_UNAVAILABLE',
+      message: 'Signed device requests require the original request body bytes.',
+    });
+    return;
+  }
+  const rawBody = typeof capturedRawBody === 'string'
+    ? capturedRawBody
+    : typeof req.body === 'string'
+      ? req.body
+      : JSON.stringify(req.body || {});
   const bodySha256 = crypto.createHash('sha256').update(rawBody).digest('hex');
   const canonicalString = `${req.method}\n${req.originalUrl || req.path}\n${timestampStr}\n${nonce}\n${bodySha256}`;
 
@@ -114,6 +130,7 @@ export function verifyDeviceSignature(req: AuthenticatedDeviceRequest, res: Resp
   req.deviceContext = {
     deviceId: deviceRow.id,
     organizationId: deviceRow.organization_id,
+    paymentSourceId: deviceRow.payment_source_id || null,
     adapterType: deviceRow.adapter_type,
     status: deviceRow.status,
   };

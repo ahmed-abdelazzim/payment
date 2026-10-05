@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { apiFetch } from '../api';
 
 interface VerifyEmailViewProps {
   language: 'en' | 'ar';
@@ -16,6 +17,7 @@ export const VerifyEmailView: React.FC<VerifyEmailViewProps> = ({
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [email, setEmail] = useState<string>('');
+  const [hasSession, setHasSession] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -33,7 +35,7 @@ export const VerifyEmailView: React.FC<VerifyEmailViewProps> = ({
 
     const verifyToken = async () => {
       try {
-        const res = await fetch('/api/v1/auth/verify-email', {
+        const res = await apiFetch('/api/v1/auth/verify-email', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -65,7 +67,11 @@ export const VerifyEmailView: React.FC<VerifyEmailViewProps> = ({
     verifyToken();
   }, [language]);
 
-  const hasSession = Boolean(localStorage.getItem('sarraf_session_token'));
+  useEffect(() => {
+    apiFetch('/api/v1/auth/me')
+      .then((res) => setHasSession(res.ok))
+      .catch(() => setHasSession(false));
+  }, []);
 
   return (
     <div className="min-h-screen bg-surface-container-lowest flex flex-col justify-center items-center px-4 py-12 selection:bg-primary selection:text-on-primary">

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../api';
 
 interface AuditLogEntry {
   id: string;
@@ -34,13 +35,10 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
 
   const fetchAllData = async () => {
     setLoading(true);
-    const token = localStorage.getItem('sarraf_session_token') || '';
-    const headers = { 'Authorization': `Bearer ${token}` };
-
     try {
       const [auditRes, rawRes] = await Promise.all([
-        fetch('/api/v1/audit', { headers }),
-        fetch('/api/v1/raw-events?limit=100', { headers }),
+        apiFetch('/api/v1/audit'),
+        apiFetch('/api/v1/raw-events?limit=100'),
       ]);
 
       if (auditRes.ok) {
@@ -85,32 +83,6 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
     fetchAllData();
   }, []);
 
-  const [downloadingDb, setDownloadingDb] = useState(false);
-
-  const handleDownloadDatabase = async () => {
-    setDownloadingDb(true);
-    const token = localStorage.getItem('sarraf_session_token') || '';
-    try {
-      const res = await fetch('/api/v1/system/download-db', {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Download failed');
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `sarraf_ops_railway_${new Date().toISOString().slice(0, 10)}.db`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch {
-      alert(language === 'ar' ? 'فشل تحميل ملف قاعدة البيانات. تأكد من صلاحيات الحساب.' : 'Failed to download database file.');
-    } finally {
-      setDownloadingDb(false);
-    }
-  };
-
   return (
     <div className="pt-16 pb-28 max-w-5xl mx-auto px-margin-mobile flex flex-col gap-space-md">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-space-sm border-b border-outline-variant">
@@ -125,18 +97,6 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
           </p>
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-          <button
-            onClick={handleDownloadDatabase}
-            disabled={downloadingDb}
-            className="px-3.5 py-1.5 rounded-lg border border-primary/40 bg-primary/10 hover:bg-primary/20 text-label-md font-semibold text-primary transition-all flex items-center gap-1.5 cursor-pointer"
-            title={language === 'ar' ? 'تحميل ملف قاعدة البيانات بالكامل لفتحه في DB Browser' : 'Download live SQLite database'}
-          >
-            <span className={`material-symbols-outlined text-base ${downloadingDb ? 'animate-spin' : ''}`}>
-              {downloadingDb ? 'progress_activity' : 'download'}
-            </span>
-            <span>{language === 'ar' ? 'تحميل قاعدة البيانات (.db)' : 'Download Database (.db)'}</span>
-          </button>
-
           <button
             onClick={fetchAllData}
             disabled={loading}

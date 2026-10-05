@@ -1,19 +1,46 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import { getDatabase } from './db';
+import { toMinor, fromMinor } from './money';
 import { verifyDeviceSignature, AuthenticatedDeviceRequest } from './middleware/deviceAuth';
-import { requireAuth, requireRole, requirePlatformOwner, AuthenticatedUserRequest } from './middleware/auth';
+import {
+  getSessionTokenFromRequest,
+  hashOpaqueToken,
+  hashSessionToken,
+  requireAuth,
+  requirePlatformOwner,
+  requireRole,
+  requireTrustedOrigin,
+  AuthenticatedUserRequest,
+} from './middleware/auth';
 import { parseEgyptianPaymentMessage } from './parser/engine';
 import { ReconciliationService } from './services/reconciliationService';
-import { LimitEngine } from './services/limitEngine';
+import { getCairoPeriodKeys, LimitEngine } from './services/limitEngine';
 import { AuditService } from './services/auditService';
 import { SubscriptionService } from './services/subscriptionService';
 import { hashPassword, verifyPassword } from './security/passwords';
 import { EmailService } from './services/emailService';
 
 export const apiRouter = Router();
+
+/**
+ * State changes made through browser cookies must be same-origin.  Capture
+ * adapters authenticate with device HMAC instead, so their two routes are
+ * intentionally excluded from this cookie-oriented CSRF guard.
+ */
+apiRouter.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    next();
+    return;
+  }
+
+  if (req.path === '/devices/ingest' || /^\/devices\/[^/]+\/telemetry$/.test(req.path)) {
+    next();
+    return;
+  }
+
+  requireTrustedOrigin(req, res, next);
+});
 
 function generateSessionToken(): string {
   return `sess_${crypto.randomBytes(32).toString('hex')}`;
@@ -30,7 +57,38 @@ function setSessionCookie(res: Response, token: string): void {
 }
 
 function clearSessionCookie(res: Response): void {
-  res.clearCookie('sarraf_session_token', { path: '/' });
+  res.clearCookie('sarraf_session_token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+  });
+}
+
+function getCurrentSourceUsage(db: ReturnType<typeof getDatabase>, paymentSourceId: string) {
+  const periodKeys = getCairoPeriodKeys();
+  const usageRows = db.prepare(`
+    SELECT period_type, accumulated_intake_minor, regulatory_cap_minor
+    FROM financial_limit_usage
+    WHERE payment_source_id = ?
+      AND ((period_type = 'daily' AND period_key = ?) OR (period_type = 'monthly' AND period_key = ?))
+  `).all(paymentSourceId, periodKeys.daily, periodKeys.monthly) as any[];
+  const daily = usageRows.find((row) => row.period_type === 'daily');
+  const monthly = usageRows.find((row) => row.period_type === 'monthly');
+  const toUsage = (row: any, fallbackCapMinor: number) => {
+    const intakeMinor = Number(row?.accumulated_intake_minor || 0);
+    const capMinor = Number(row?.regulatory_cap_minor || fallbackCapMinor);
+    return {
+      intake: fromMinor(intakeMinor),
+      percentage: capMinor > 0 ? Math.round((intakeMinor * 100) / capMinor) : 0,
+    };
+  };
+
+  return {
+    daily: toUsage(daily, 0),
+    monthly: toUsage(monthly, 0),
+    periodKeys,
+  };
 }
 
 // ==========================================
@@ -80,8 +138,8 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
 
     // 4. Create Clean Initial Balance Account (Zero Balance)
     db.prepare(`
-      INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance)
-      VALUES (?, ?, 'Main Operational Account (EGP)', 'EGP', 0.0)
+      INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance_minor)
+      VALUES (?, ?, 'Main Operational Account (EGP)', 'EGP', 0)
     `).run(`acc_${orgId}`, orgId);
 
     // 5. Generate Session Token (7 Days)
@@ -90,7 +148,7 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
     db.prepare(`
       INSERT INTO sessions (token, user_id, organization_id, expires_at)
       VALUES (?, ?, ?, ?)
-    `).run(token, userId, orgId, expiresAt);
+    `).run(hashSessionToken(token), userId, orgId, expiresAt);
 
     // 6. Generate Email Verification Token (24 Hours Expiry)
     const verifyToken = `verify_${crypto.randomBytes(24).toString('hex')}`;
@@ -98,7 +156,7 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
     db.prepare(`
       INSERT INTO email_verifications (token, user_id, email, expires_at)
       VALUES (?, ?, ?, ?)
-    `).run(verifyToken, userId, normalizedEmail, verifyExpiresAt);
+    `).run(hashOpaqueToken(verifyToken), userId, normalizedEmail, verifyExpiresAt);
 
     AuditService.record({
       organizationId: orgId,
@@ -124,16 +182,14 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
       fullName: fullName.trim(),
       token: verifyToken,
       organizationName: organizationNameAr || organizationName,
-    }).catch((err) => console.error('[Signup] Email dispatch error:', err));
+    }).catch(() => console.error('[Signup] Email dispatch failed.'));
 
     res.status(201).json({
-      token,
       user: { id: userId, email: normalizedEmail, fullName, role: 'owner', emailVerified: false },
       organization: { id: orgId, name: organizationName, nameAr: organizationNameAr || organizationName, slug },
-      verification: {
-        token: verifyToken,
+      emailVerification: {
+        pending: true,
         expiresAt: verifyExpiresAt,
-        instructions: 'Click verification link or call /api/v1/auth/verify-email to confirm your business email.',
       },
     });
   } catch (err: any) {
@@ -142,7 +198,7 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
       res.status(409).json({ error: 'EMAIL_ALREADY_EXISTS', message: 'An account with this email already exists' });
       return;
     }
-    res.status(500).json({ error: 'SIGNUP_FAILED', message: err.message });
+    res.status(500).json({ error: 'SIGNUP_FAILED', message: 'Unable to create the account at this time.' });
   }
 });
 
@@ -177,7 +233,8 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   }
 
   const user = db.prepare(`
-    SELECT id, email, password_hash, full_name, email_verified, is_active FROM users WHERE email = ?
+    SELECT id, email, password_hash, full_name, email_verified, is_active, COALESCE(is_platform_admin, 0) AS is_platform_admin
+    FROM users WHERE email = ?
   `).get(normalizedEmail) as any;
 
   // Verify password with timing-safe scrypt and transparent legacy rehash detection
@@ -237,7 +294,7 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   db.prepare(`
     INSERT INTO sessions (token, user_id, organization_id, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(token, user.id, member.organization_id, expiresAt);
+  `).run(hashSessionToken(token), user.id, member.organization_id, expiresAt);
 
   AuditService.record({
     organizationId: member.organization_id,
@@ -252,14 +309,13 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   setSessionCookie(res, token);
 
   res.json({
-    token,
     user: {
       id: user.id,
       email: user.email,
       fullName: user.full_name,
       role: member.role,
       emailVerified: Boolean(user.email_verified),
-      isPlatformAdmin: Boolean(user.is_platform_admin === 1 || user.email === 'aabdo6043@gmail.com' || member.organization_id === 'org_platform_ops'),
+      isPlatformAdmin: Boolean(user.is_platform_admin === 1),
     },
     organization: { id: member.organization_id, name: member.name, nameAr: member.name_ar, slug: member.slug },
   });
@@ -276,7 +332,7 @@ apiRouter.post('/auth/verify-email', (req: Request, res: Response) => {
   const db = getDatabase();
   const row = db.prepare(`
     SELECT user_id, email, expires_at, used_at FROM email_verifications WHERE token = ?
-  `).get(token) as any;
+  `).get(hashOpaqueToken(token)) as any;
 
   if (!row || row.used_at || new Date() > new Date(row.expires_at)) {
     res.status(400).json({ error: 'INVALID_OR_EXPIRED_TOKEN', message: 'Email verification token is invalid or expired.' });
@@ -286,13 +342,13 @@ apiRouter.post('/auth/verify-email', (req: Request, res: Response) => {
   db.exec('BEGIN IMMEDIATE;');
   try {
     db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(row.user_id);
-    db.prepare('UPDATE email_verifications SET used_at = datetime("now") WHERE token = ?').run(token);
+    db.prepare('UPDATE email_verifications SET used_at = datetime("now") WHERE token = ?').run(hashOpaqueToken(token));
     db.exec('COMMIT;');
 
     res.json({ message: 'Email verified successfully', email: row.email });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'VERIFICATION_FAILED', message: err.message });
+    res.status(500).json({ error: 'VERIFICATION_FAILED', message: 'Unable to verify this email at this time.' });
   }
 });
 
@@ -305,24 +361,25 @@ apiRouter.post('/auth/resend-verification', (req: Request, res: Response) => {
   }
 
   const db = getDatabase();
-  const user = db.prepare('SELECT id, email, email_verified FROM users WHERE email = ?').get(email.toLowerCase().trim()) as any;
+  const user = db.prepare('SELECT id, email, full_name, email_verified FROM users WHERE email = ?').get(email.toLowerCase().trim()) as any;
 
   if (user && !user.email_verified) {
     const newToken = `verify_${crypto.randomBytes(24).toString('hex')}`;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    db.prepare("UPDATE email_verifications SET used_at = datetime('now') WHERE user_id = ? AND used_at IS NULL").run(user.id);
     db.prepare(`
       INSERT INTO email_verifications (token, user_id, email, expires_at)
       VALUES (?, ?, ?, ?)
-    `).run(newToken, user.id, user.email, expiresAt);
+    `).run(hashOpaqueToken(newToken), user.id, user.email, expiresAt);
 
     EmailService.sendVerificationEmail({
       to: user.email,
       fullName: user.full_name || user.email,
       token: newToken,
       organizationName: 'Sarraf Ops',
-    }).catch((err) => console.error('[ResendVerification] Email dispatch error:', err));
+    }).catch(() => console.error('[ResendVerification] Email dispatch failed.'));
 
-    res.json({ message: 'Verification link dispatched', verificationToken: newToken });
+    res.json({ message: 'If this unverified email exists, a verification link has been dispatched.' });
     return;
   }
 
@@ -331,15 +388,11 @@ apiRouter.post('/auth/resend-verification', (req: Request, res: Response) => {
 
 // Logout: Revokes Session and Clears HTTP Cookie
 apiRouter.post('/auth/logout', (req: Request, res: Response) => {
-  let token = req.header('X-Session-Token') || req.header('Authorization')?.replace('Bearer ', '');
-  if (!token && req.headers.cookie) {
-    const match = req.headers.cookie.match(/(?:sarraf_session_token|session_token)=([^;]+)/);
-    if (match) token = match[1];
-  }
+  const token = getSessionTokenFromRequest(req);
 
   if (token) {
     const db = getDatabase();
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(hashSessionToken(token));
   }
 
   clearSessionCookie(res);
@@ -356,7 +409,7 @@ apiRouter.post('/auth/forgot-password', (req: Request, res: Response) => {
 
   const db = getDatabase();
   const normalized = email.toLowerCase().trim();
-  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(normalized) as any;
+  const user = db.prepare('SELECT id, full_name FROM users WHERE email = ?').get(normalized) as any;
 
   if (user) {
     const resetToken = `reset_${crypto.randomBytes(24).toString('hex')}`;
@@ -364,19 +417,15 @@ apiRouter.post('/auth/forgot-password', (req: Request, res: Response) => {
     db.prepare(`
       INSERT INTO password_resets (token, user_id, expires_at)
       VALUES (?, ?, ?)
-    `).run(resetToken, user.id, expiresAt);
+    `).run(hashOpaqueToken(resetToken), user.id, expiresAt);
 
     EmailService.sendPasswordResetEmail({
       to: normalized,
       fullName: user.full_name || '',
       token: resetToken,
-    }).catch((err) => console.error('[ForgotPassword] Email dispatch error:', err));
+    }).catch(() => console.error('[ForgotPassword] Email dispatch failed.'));
 
-    res.json({
-      message: 'Password reset link generated. Check your inbox.',
-      reset_token_instructions: `Use reset token ${resetToken} to set your new password. Valid for 15 minutes.`,
-      reset_token: resetToken,
-    });
+    res.json({ message: 'If this email exists, a password reset link has been dispatched.' });
     return;
   }
 
@@ -395,7 +444,7 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
   const db = getDatabase();
   const resetRow = db.prepare(`
     SELECT user_id, expires_at, used_at FROM password_resets WHERE token = ?
-  `).get(token) as any;
+  `).get(hashOpaqueToken(token)) as any;
 
   if (!resetRow || resetRow.used_at || new Date() > new Date(resetRow.expires_at)) {
     res.status(400).json({ error: 'INVALID_OR_EXPIRED_TOKEN', message: 'Reset token is invalid or expired' });
@@ -406,7 +455,7 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
   try {
     const scryptHash = hashPassword(newPassword);
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(scryptHash, resetRow.user_id);
-    db.prepare('UPDATE password_resets SET used_at = datetime("now") WHERE token = ?').run(token);
+    db.prepare('UPDATE password_resets SET used_at = datetime("now") WHERE token = ?').run(hashOpaqueToken(token));
     // Invalidate ALL existing sessions for this user across all devices
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(resetRow.user_id);
     db.exec('COMMIT;');
@@ -415,7 +464,7 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
     res.json({ message: 'Password updated successfully. Please sign in with your new password.' });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'RESET_FAILED', message: err.message });
+    res.status(500).json({ error: 'RESET_FAILED', message: 'Unable to reset the password at this time.' });
   }
 });
 
@@ -459,9 +508,9 @@ apiRouter.post('/auth/switch-workspace', requireAuth, (req: AuthenticatedUserReq
   }
 
   // Update session token's active organization
-  const token = req.header('X-Session-Token') || req.header('Authorization')?.replace('Bearer ', '');
+  const token = getSessionTokenFromRequest(req);
   if (token) {
-    db.prepare('UPDATE sessions SET organization_id = ? WHERE token = ?').run(organizationId, token);
+    db.prepare('UPDATE sessions SET organization_id = ? WHERE token = ?').run(organizationId, hashSessionToken(token));
   }
 
   res.json({
@@ -492,7 +541,7 @@ apiRouter.get('/organizations/members', requireAuth, (req: AuthenticatedUserRequ
 apiRouter.get('/organizations/members/invitations', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const invitations = db.prepare(`
-    SELECT token, email, role, expires_at as expiresAt, created_at as createdAt
+    SELECT email, role, expires_at as expiresAt, created_at as createdAt
     FROM team_invitations
     WHERE organization_id = ? AND accepted_at IS NULL AND expires_at > datetime('now')
     ORDER BY created_at DESC
@@ -531,14 +580,14 @@ apiRouter.post('/organizations/members/invite', requireAuth, requireRole(['owner
     db.prepare(`
       INSERT INTO team_invitations (token, organization_id, email, role, inviter_user_id, expires_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(inviteToken, req.user!.organizationId, normalizedEmail, role, req.user!.id);
+    `).run(hashOpaqueToken(inviteToken), req.user!.organizationId, normalizedEmail, role, req.user!.id, expiresAt);
 
     AuditService.record({
       organizationId: req.user!.organizationId,
       actorIdentity: req.user!.email,
       action: 'TEAM_MEMBER_INVITATION_ISSUED',
       resourceType: 'team_invitation',
-      resourceId: inviteToken,
+      resourceId: normalizedEmail,
       originIp: req.ip,
       details: { invitedEmail: normalizedEmail, assignedRole: role },
     });
@@ -552,18 +601,16 @@ apiRouter.post('/organizations/members/invite', requireAuth, requireRole(['owner
       organizationName: orgDisplayName,
       role,
       token: inviteToken,
-    }).catch((err) => console.error('[TeamInvite] Email dispatch error:', err));
+    }).catch(() => console.error('[TeamInvite] Email dispatch failed.'));
 
     res.status(201).json({
-      message: 'Invitation issued successfully and email dispatched',
-      inviteToken,
-      inviteLink: `/invite/${inviteToken}`,
+      message: 'Invitation request accepted. The recipient will receive a link if email delivery is configured.',
       email: normalizedEmail,
       role,
       expiresAt,
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'INVITE_FAILED', message: err.message });
+    res.status(500).json({ error: 'INVITE_FAILED', message: 'Unable to create the invitation at this time.' });
   }
 });
 
@@ -579,7 +626,7 @@ apiRouter.post('/organizations/members/invitations/accept', requireAuth, (req: A
   const invite = db.prepare(`
     SELECT token, organization_id, email, role, expires_at, accepted_at
     FROM team_invitations WHERE token = ?
-  `).get(token) as any;
+  `).get(hashOpaqueToken(token)) as any;
 
   if (!invite || invite.accepted_at || new Date() > new Date(invite.expires_at)) {
     res.status(400).json({ error: 'INVALID_OR_EXPIRED_INVITATION', message: 'Invitation token is invalid or has expired' });
@@ -594,7 +641,7 @@ apiRouter.post('/organizations/members/invitations/accept', requireAuth, (req: A
       ON CONFLICT(organization_id, user_id) DO UPDATE SET role = excluded.role
     `).run(`mem_${Date.now()}`, invite.organization_id, req.user!.id, invite.role);
 
-    db.prepare(`UPDATE team_invitations SET accepted_at = datetime('now') WHERE token = ?`).run(token);
+    db.prepare(`UPDATE team_invitations SET accepted_at = datetime('now') WHERE token = ?`).run(hashOpaqueToken(token));
 
     AuditService.record({
       organizationId: invite.organization_id,
@@ -610,7 +657,7 @@ apiRouter.post('/organizations/members/invitations/accept', requireAuth, (req: A
     res.json({ message: 'Successfully joined organization', organizationId: invite.organization_id, role: invite.role });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'ACCEPT_INVITATION_FAILED', message: err.message });
+    res.status(500).json({ error: 'ACCEPT_INVITATION_FAILED', message: 'Unable to accept the invitation at this time.' });
   }
 });
 
@@ -625,7 +672,7 @@ apiRouter.get('/organizations/members/invitations/:token', (req: Request, res: R
     FROM team_invitations i
     JOIN organizations o ON o.id = i.organization_id
     WHERE i.token = ?
-  `).get(token) as any;
+  `).get(hashOpaqueToken(token)) as any;
 
   if (!invite) {
     res.status(404).json({ error: 'INVITATION_NOT_FOUND', message: 'Invitation not found' });
@@ -636,7 +683,6 @@ apiRouter.get('/organizations/members/invitations/:token', (req: Request, res: R
   const isAccepted = Boolean(invite.accepted_at);
 
   res.json({
-    token: invite.token,
     organizationId: invite.organization_id,
     organizationName: invite.organization_name,
     organizationNameAr: invite.organization_name_ar || invite.organization_name,
@@ -669,7 +715,7 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
     FROM team_invitations i
     JOIN organizations o ON o.id = i.organization_id
     WHERE i.token = ?
-  `).get(token) as any;
+  `).get(hashOpaqueToken(token)) as any;
 
   if (!invite || invite.accepted_at || new Date() > new Date(invite.expires_at)) {
     res.status(400).json({ error: 'INVALID_OR_EXPIRED_INVITATION', message: 'Invitation is invalid or has expired' });
@@ -697,7 +743,7 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
       ON CONFLICT(organization_id, user_id) DO UPDATE SET role = excluded.role
     `).run(`mem_${Date.now()}`, invite.organization_id, userId, invite.role);
 
-    db.prepare(`UPDATE team_invitations SET accepted_at = datetime('now') WHERE token = ?`).run(token);
+    db.prepare(`UPDATE team_invitations SET accepted_at = datetime('now') WHERE token = ?`).run(hashOpaqueToken(token));
 
     // Create session
     const sessionToken = generateSessionToken();
@@ -705,7 +751,7 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
     db.prepare(`
       INSERT INTO sessions (token, user_id, organization_id, expires_at)
       VALUES (?, ?, ?, ?)
-    `).run(sessionToken, userId, invite.organization_id, expiresAt);
+    `).run(hashSessionToken(sessionToken), userId, invite.organization_id, expiresAt);
 
     AuditService.record({
       organizationId: invite.organization_id,
@@ -722,7 +768,6 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
     setSessionCookie(res, sessionToken);
 
     res.json({
-      token: sessionToken,
       user: { id: userId, email: normalizedEmail, fullName: fullName.trim(), role: invite.role },
       organization: {
         id: invite.organization_id,
@@ -733,7 +778,7 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
     });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'JOIN_FAILED', message: err.message });
+    res.status(500).json({ error: 'JOIN_FAILED', message: 'Unable to complete account setup at this time.' });
   }
 });
 
@@ -751,10 +796,11 @@ apiRouter.get('/organizations/settings', requireAuth, (req: AuthenticatedUserReq
     name: org?.name,
     nameAr: org?.name_ar,
     defaultTimezone: org?.default_timezone,
-    telegramBotToken: org?.telegram_bot_token || '',
+    // Credentials are write-only.  Do not return them to any browser role.
+    telegramBotTokenConfigured: Boolean(org?.telegram_bot_token),
     telegramChatId: org?.telegram_chat_id || '',
     webhookUrl: org?.webhook_url || '',
-    webhookSecret: org?.webhook_secret || `whsec_${crypto.randomBytes(16).toString('hex')}`,
+    webhookSecretConfigured: Boolean(org?.webhook_secret),
   });
 });
 
@@ -762,6 +808,12 @@ apiRouter.get('/organizations/settings', requireAuth, (req: AuthenticatedUserReq
 apiRouter.post('/organizations/settings', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const { name, nameAr, defaultTimezone, telegramBotToken, telegramChatId, webhookUrl, webhookSecret } = req.body;
   const db = getDatabase();
+  const replacementTelegramToken = typeof telegramBotToken === 'string' && telegramBotToken.trim()
+    ? telegramBotToken.trim()
+    : null;
+  const replacementWebhookSecret = typeof webhookSecret === 'string' && webhookSecret.trim()
+    ? webhookSecret.trim()
+    : null;
 
   db.prepare(`
     UPDATE organizations
@@ -778,10 +830,10 @@ apiRouter.post('/organizations/settings', requireAuth, requireRole(['owner', 'ad
     name || null,
     nameAr || null,
     defaultTimezone || null,
-    telegramBotToken !== undefined ? telegramBotToken : null,
+    replacementTelegramToken,
     telegramChatId !== undefined ? telegramChatId : null,
     webhookUrl !== undefined ? webhookUrl : null,
-    webhookSecret !== undefined ? webhookSecret : null,
+    replacementWebhookSecret,
     req.user!.organizationId
   );
 
@@ -805,10 +857,10 @@ apiRouter.get('/sources', requireAuth, (req: AuthenticatedUserRequest, res: Resp
   const db = getDatabase();
   const rows = db.prepare(`
     SELECT s.id, s.provider, s.friendly_name as name, s.wallet_number as walletNumber,
-           s.daily_turnover_limit as dailyLimit, s.monthly_turnover_limit as monthlyLimit,
+           s.daily_turnover_limit_minor / 100.0 as dailyLimit, s.monthly_turnover_limit_minor / 100.0 as monthlyLimit,
            s.is_paused_for_new_instructions as isPaused,
            a.address_value as primaryAddress, a.address_type as addressType, a.is_default_for_invoices as isDefault,
-           COALESCE((SELECT SUM(amount) FROM transactions WHERE payment_source_id = s.id AND status = 'confirmed'), 0) as volume,
+           COALESCE((SELECT SUM(amount_minor) FROM transactions WHERE payment_source_id = s.id AND status = 'confirmed'), 0) / 100.0 as volume,
            COALESCE((SELECT COUNT(*) FROM transactions WHERE payment_source_id = s.id AND status = 'confirmed'), 0) as txnsCount
     FROM payment_sources s
     LEFT JOIN payment_addresses a ON (s.id = a.payment_source_id AND a.is_default_for_invoices = 1)
@@ -818,45 +870,117 @@ apiRouter.get('/sources', requireAuth, (req: AuthenticatedUserRequest, res: Resp
 
   const totalVol = rows.reduce((acc, r) => acc + (r.volume || 0), 0) || 1;
 
-  const result = rows.map((r) => ({
-    ...r,
-    sharePercentage: Math.round(((r.volume || 0) / totalVol) * 100),
-    isPaused: Boolean(r.isPaused),
-    isDefault: Boolean(r.isDefault),
-    color: r.provider === 'vodafone_cash' ? '#1e3a8a' : r.provider === 'instapay' ? '#00285e' : r.provider === 'orange_cash' ? '#565e74' : '#00236f',
-  }));
+  const result = rows.map((r) => {
+    const usage = getCurrentSourceUsage(db, r.id);
+    return {
+      ...r,
+      sharePercentage: Math.round(((r.volume || 0) / totalVol) * 100),
+      dailyIntake: usage.daily.intake,
+      monthlyIntake: usage.monthly.intake,
+      dailyPercentage: usage.daily.percentage,
+      monthlyPercentage: usage.monthly.percentage,
+      usagePeriodKeys: usage.periodKeys,
+      isPaused: Boolean(r.isPaused),
+      isDefault: Boolean(r.isDefault),
+      color: r.provider === 'vodafone_cash' ? '#1e3a8a' : r.provider === 'instapay' ? '#00285e' : r.provider === 'orange_cash' ? '#565e74' : '#00236f',
+    };
+  });
 
   res.json(result);
 });
 
 // Add New Payment Source (Wallet, Bank Account, InstaPay)
 apiRouter.post('/sources', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
-  const { provider, friendlyName, walletNumber, dailyLimit, monthlyLimit, addressType, setAsDefault } = req.body;
+  const { provider, friendlyName, walletNumber, dailyLimit, monthlyLimit, addressType, setAsDefault, balanceAccountId: requestedBalanceAccountId } = req.body;
   if (!provider || !friendlyName || !walletNumber) {
     res.status(400).json({ error: 'MISSING_SOURCE_FIELDS', message: 'Provider, friendly name, and wallet number required' });
+    return;
+  }
+
+  const normalizedProvider = String(provider);
+  if (!['vodafone_cash', 'instapay', 'orange_cash', 'etisalat_cash'].includes(normalizedProvider)) {
+    res.status(400).json({ error: 'INVALID_PROVIDER', message: 'Choose a supported payment provider.' });
+    return;
+  }
+
+  const normalizedFriendlyName = String(friendlyName).trim();
+  const normalizedAddress = String(walletNumber).trim();
+  const suppliedDailyLimit = dailyLimit !== undefined && dailyLimit !== null && dailyLimit !== '';
+  const suppliedMonthlyLimit = monthlyLimit !== undefined && monthlyLimit !== null && monthlyLimit !== '';
+  if (!normalizedFriendlyName || !normalizedAddress || normalizedFriendlyName.length > 150 || normalizedAddress.length > 150) {
+    res.status(400).json({ error: 'INVALID_SOURCE_DETAILS', message: 'Source name and receiving address must be valid.' });
+    return;
+  }
+  if (normalizedProvider === 'instapay' && (!suppliedDailyLimit || !suppliedMonthlyLimit)) {
+    res.status(422).json({
+      error: 'COMMERCIAL_LIMITS_REQUIRED',
+      message: 'Enter the bank-approved daily and monthly receiving limits for this InstaPay source.',
+    });
     return;
   }
 
   const db = getDatabase();
   const sourceId = `src_${Date.now()}`;
 
-  // Find balance account
-  const acc = db.prepare('SELECT id FROM balance_accounts WHERE organization_id = ? LIMIT 1').get(req.user!.organizationId) as any;
-  const balanceAccountId = acc?.id || `acc_${req.user!.organizationId}`;
+  // Wallet limits must be verified against the merchant's provider/account. These defaults
+  // are used only for mobile wallets; InstaPay requires the merchant's own approved values.
+  const defaultDailyMinor = 6_000_000; // 60,000.00 EGP
+  const defaultMonthlyMinor = 20_000_000; // 200,000.00 EGP
+  let resolvedDailyMinor: number;
+  let resolvedMonthlyMinor: number;
+  try {
+    resolvedDailyMinor = suppliedDailyLimit ? toMinor(typeof dailyLimit === 'string' ? dailyLimit : Number(dailyLimit), { allowZero: false }) : defaultDailyMinor;
+    resolvedMonthlyMinor = suppliedMonthlyLimit ? toMinor(typeof monthlyLimit === 'string' ? monthlyLimit : Number(monthlyLimit), { allowZero: false }) : defaultMonthlyMinor;
+  } catch {
+    res.status(400).json({ error: 'INVALID_SOURCE_LIMITS', message: 'Daily and monthly limits must be positive EGP amounts with at most two decimals.' });
+    return;
+  }
+  const resolvedDailyLimit = fromMinor(resolvedDailyMinor);
+  const resolvedMonthlyLimit = fromMinor(resolvedMonthlyMinor);
 
-  // Default statutory limits if unprovided
-  const defaultDaily = provider === 'instapay' ? 120000.0 : 60000.0;
-  const defaultMonthly = provider === 'instapay' ? 400000.0 : 200000.0;
+  const normalizedAddressType = addressType || (normalizedProvider === 'instapay' ? 'instapay_vpa' : 'msisdn');
+  if (!['msisdn', 'instapay_vpa', 'iban'].includes(normalizedAddressType)) {
+    res.status(400).json({ error: 'INVALID_ADDRESS_TYPE', message: 'Choose a supported receiving address type.' });
+    return;
+  }
 
   db.exec('BEGIN IMMEDIATE;');
   try {
+    let balanceAccountId: string;
+    if (requestedBalanceAccountId) {
+      const existingAccount = db.prepare(`
+        SELECT id FROM balance_accounts WHERE id = ? AND organization_id = ?
+      `).get(String(requestedBalanceAccountId), req.user!.organizationId) as any;
+      if (!existingAccount) {
+        db.exec('ROLLBACK;');
+        res.status(422).json({ error: 'INVALID_BALANCE_ACCOUNT', message: 'Select a balance account owned by this workspace.' });
+        return;
+      }
+      balanceAccountId = existingAccount.id;
+    } else {
+      // A new receiving wallet gets an independent ledger by default. Add further
+      // aliases to the existing source when they share the same bank balance.
+      balanceAccountId = `acc_${sourceId}`;
+      db.prepare(`
+        INSERT INTO balance_accounts (id, organization_id, account_name, currency, current_balance_minor)
+        VALUES (?, ?, ?, 'EGP', 0)
+      `).run(balanceAccountId, req.user!.organizationId, `${normalizedFriendlyName} (EGP)`);
+    }
+
     db.prepare(`
-      INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit, monthly_turnover_limit)
+      INSERT INTO payment_sources (id, organization_id, balance_account_id, provider, friendly_name, wallet_number, daily_turnover_limit_minor, monthly_turnover_limit_minor)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(sourceId, req.user!.organizationId, balanceAccountId, provider, friendlyName.trim(), walletNumber.trim(), dailyLimit || defaultDaily, monthlyLimit || defaultMonthly);
+    `).run(sourceId, req.user!.organizationId, balanceAccountId, normalizedProvider, normalizedFriendlyName, normalizedAddress, resolvedDailyMinor, resolvedMonthlyMinor);
 
     const addrId = `addr_${Date.now()}`;
-    const isDef = setAsDefault ? 1 : 0;
+    const existingDefault = db.prepare(`
+      SELECT id FROM payment_addresses
+      WHERE is_default_for_invoices = 1
+        AND payment_source_id IN (SELECT id FROM payment_sources WHERE organization_id = ?)
+      LIMIT 1
+    `).get(req.user!.organizationId);
+    const setDefaultRequested = setAsDefault === true || setAsDefault === 1 || setAsDefault === 'true';
+    const isDef = setDefaultRequested || !existingDefault ? 1 : 0;
 
     if (isDef) {
       // Clear other defaults in organization
@@ -869,7 +993,7 @@ apiRouter.post('/sources', requireAuth, requireRole(['owner', 'admin']), (req: A
     db.prepare(`
       INSERT INTO payment_addresses (id, payment_source_id, address_type, address_value, is_default_for_invoices)
       VALUES (?, ?, ?, ?, ?)
-    `).run(addrId, sourceId, addressType || (provider === 'instapay' ? 'instapay_vpa' : 'msisdn'), walletNumber.trim(), isDef);
+    `).run(addrId, sourceId, normalizedAddressType, normalizedAddress, isDef);
 
     AuditService.record({
       organizationId: req.user!.organizationId,
@@ -878,24 +1002,156 @@ apiRouter.post('/sources', requireAuth, requireRole(['owner', 'admin']), (req: A
       resourceType: 'payment_source',
       resourceId: sourceId,
       originIp: req.ip,
-      details: { provider, friendlyName, walletNumber },
+      details: { provider: normalizedProvider, sourceName: normalizedFriendlyName, paymentSourceId: sourceId },
     });
 
     db.exec('COMMIT;');
-    res.status(201).json({ id: sourceId, friendlyName, walletNumber, provider });
+    res.status(201).json({
+      id: sourceId,
+      balanceAccountId,
+      friendlyName: normalizedFriendlyName,
+      walletNumber: normalizedAddress,
+      provider: normalizedProvider,
+      dailyLimit: resolvedDailyLimit,
+      monthlyLimit: resolvedMonthlyLimit,
+      isDefault: Boolean(isDef),
+    });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'CREATE_SOURCE_FAILED', message: err.message });
+    res.status(500).json({ error: 'CREATE_SOURCE_FAILED', message: 'Unable to create the receiving source at this time.' });
   }
 });
 
+apiRouter.get('/sources/:id/addresses', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const db = getDatabase();
+  const source = db.prepare(`
+    SELECT id FROM payment_sources WHERE id = ? AND organization_id = ?
+  `).get(req.params.id, req.user!.organizationId) as any;
+  if (!source) {
+    res.status(404).json({ error: 'SOURCE_NOT_FOUND', message: 'Receiving source was not found.' });
+    return;
+  }
+  const addresses = db.prepare(`
+    SELECT id, address_type as addressType, address_value as addressValue,
+           is_default_for_invoices as isDefault, activated_at as activatedAt, retired_at as retiredAt
+    FROM payment_addresses
+    WHERE payment_source_id = ?
+    ORDER BY is_default_for_invoices DESC, activated_at ASC
+  `).all(source.id).map((address: any) => ({ ...address, isDefault: Boolean(address.isDefault) }));
+  res.json(addresses);
+});
+
+// Add another receiving alias to an existing source. This is the safe path for
+// multiple InstaPay aliases that settle into the same underlying account.
+apiRouter.post('/sources/:id/addresses', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const { addressValue, addressType, setAsDefault } = req.body;
+  const normalizedAddress = typeof addressValue === 'string' ? addressValue.trim() : '';
+  const normalizedAddressType = typeof addressType === 'string' ? addressType : '';
+  if (!normalizedAddress || normalizedAddress.length > 150 || !['msisdn', 'instapay_vpa', 'iban'].includes(normalizedAddressType)) {
+    res.status(400).json({ error: 'INVALID_RECEIVING_ADDRESS', message: 'Enter a valid receiving address and type.' });
+    return;
+  }
+
+  const db = getDatabase();
+  const source = db.prepare(`
+    SELECT id FROM payment_sources
+    WHERE id = ? AND organization_id = ? AND retired_at IS NULL
+  `).get(req.params.id, req.user!.organizationId) as any;
+  if (!source) {
+    res.status(404).json({ error: 'SOURCE_NOT_FOUND', message: 'Receiving source was not found.' });
+    return;
+  }
+
+  const addressId = `addr_${Date.now()}_${Math.floor(Math.random() * 1_000)}`;
+  const setDefaultRequested = setAsDefault === true || setAsDefault === 1 || setAsDefault === 'true';
+  db.exec('BEGIN IMMEDIATE;');
+  try {
+    if (setDefaultRequested) {
+      db.prepare(`
+        UPDATE payment_addresses SET is_default_for_invoices = 0
+        WHERE payment_source_id IN (SELECT id FROM payment_sources WHERE organization_id = ?)
+      `).run(req.user!.organizationId);
+    }
+    db.prepare(`
+      INSERT INTO payment_addresses (id, payment_source_id, address_type, address_value, is_default_for_invoices)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(addressId, source.id, normalizedAddressType, normalizedAddress, setDefaultRequested ? 1 : 0);
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'PAYMENT_ADDRESS_ADDED',
+      resourceType: 'payment_address',
+      resourceId: addressId,
+      originIp: req.ip,
+      details: { paymentSourceId: source.id, addressType: normalizedAddressType },
+    });
+    db.exec('COMMIT;');
+    res.status(201).json({ id: addressId, paymentSourceId: source.id, addressType: normalizedAddressType, isDefault: setDefaultRequested });
+  } catch (error: any) {
+    db.exec('ROLLBACK;');
+    const isDuplicate = String(error?.message || '').includes('UNIQUE constraint failed');
+    res.status(isDuplicate ? 409 : 500).json({
+      error: isDuplicate ? 'RECEIVING_ADDRESS_ALREADY_EXISTS' : 'CREATE_RECEIVING_ADDRESS_FAILED',
+      message: isDuplicate ? 'This address is already registered for the source.' : 'Unable to add the receiving address at this time.',
+    });
+  }
+});
+
+// Retiring a source stops it from new payment instructions while capture devices
+// stay bound so delayed payments can still be reconciled and audited.
+apiRouter.post('/sources/:id/retire', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const db = getDatabase();
+  const source = db.prepare(`
+    SELECT s.id,
+           EXISTS(SELECT 1 FROM payment_addresses a WHERE a.payment_source_id = s.id AND a.is_default_for_invoices = 1) AS is_default
+    FROM payment_sources s
+    WHERE s.id = ? AND s.organization_id = ? AND s.retired_at IS NULL
+  `).get(req.params.id, req.user!.organizationId) as any;
+  if (!source) {
+    res.status(404).json({ error: 'SOURCE_NOT_FOUND', message: 'Receiving source was not found.' });
+    return;
+  }
+  if (Boolean(source.is_default)) {
+    res.status(409).json({
+      error: 'SET_REPLACEMENT_SOURCE_FIRST',
+      message: 'Choose another active source as the default before retiring this one.',
+    });
+    return;
+  }
+
+  db.prepare(`
+    UPDATE payment_sources
+    SET retired_at = datetime('now'), is_paused_for_new_instructions = 1, updated_at = datetime('now')
+    WHERE id = ? AND organization_id = ?
+  `).run(source.id, req.user!.organizationId);
+  AuditService.record({
+    organizationId: req.user!.organizationId,
+    actorIdentity: req.user!.email,
+    action: 'PAYMENT_SOURCE_RETIRED',
+    resourceType: 'payment_source',
+    resourceId: source.id,
+    originIp: req.ip,
+  });
+  res.json({ id: source.id, retired: true, captureRemainsAvailableForDelayedPayments: true });
+});
+
 // Safe Switch: Set as Default for Invoices (Preserves historical capture on others)
-apiRouter.post('/sources/:id/set-default', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
+apiRouter.post('/sources/:id/set-default', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const { id } = req.params;
 
   db.exec('BEGIN IMMEDIATE;');
   try {
+    const targetSource = db.prepare(`
+      SELECT id FROM payment_sources
+      WHERE id = ? AND organization_id = ? AND retired_at IS NULL
+    `).get(id, req.user!.organizationId);
+    if (!targetSource) {
+      db.exec('ROLLBACK;');
+      res.status(404).json({ error: 'SOURCE_NOT_FOUND' });
+      return;
+    }
+
     // 1. Reset current defaults
     db.prepare(`
       UPDATE payment_addresses SET is_default_for_invoices = 0
@@ -903,7 +1159,11 @@ apiRouter.post('/sources/:id/set-default', requireAuth, requireRole(['owner', 'a
     `).run(req.user!.organizationId);
 
     // 2. Set this source's address as default
-    db.prepare(`UPDATE payment_addresses SET is_default_for_invoices = 1 WHERE payment_source_id = ?`).run(id);
+    db.prepare(`
+      UPDATE payment_addresses SET is_default_for_invoices = 1
+      WHERE payment_source_id = ?
+        AND payment_source_id IN (SELECT id FROM payment_sources WHERE organization_id = ?)
+    `).run(id, req.user!.organizationId);
 
     AuditService.record({
       organizationId: req.user!.organizationId,
@@ -918,7 +1178,7 @@ apiRouter.post('/sources/:id/set-default', requireAuth, requireRole(['owner', 'a
     res.json({ message: 'Default payment receiving source safely updated' });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'SWITCH_FAILED', message: err.message });
+    res.status(500).json({ error: 'SWITCH_FAILED', message: 'Unable to switch the default receiving source at this time.' });
   }
 });
 
@@ -931,7 +1191,7 @@ apiRouter.post('/sources/:id/toggle-pause', requireAuth, requireRole(['owner', '
     return;
   }
   const nextState = current.is_paused_for_new_instructions ? 0 : 1;
-  db.prepare('UPDATE payment_sources SET is_paused_for_new_instructions = ? WHERE id = ?').run(nextState, req.params.id);
+  db.prepare('UPDATE payment_sources SET is_paused_for_new_instructions = ? WHERE id = ? AND organization_id = ?').run(nextState, req.params.id, req.user!.organizationId);
 
   AuditService.record({
     organizationId: req.user!.organizationId,
@@ -950,9 +1210,9 @@ apiRouter.get('/rails', requireAuth, (req: AuthenticatedUserRequest, res: Respon
   const db = getDatabase();
   const rows = db.prepare(`
     SELECT s.id, s.provider, s.friendly_name as name, s.wallet_number as walletNumber,
-           s.daily_turnover_limit as dailyLimit, s.monthly_turnover_limit as monthlyLimit,
+           s.daily_turnover_limit_minor / 100.0 as dailyLimit, s.monthly_turnover_limit_minor / 100.0 as monthlyLimit,
            s.is_paused_for_new_instructions as isPaused,
-           COALESCE((SELECT SUM(amount) FROM transactions WHERE payment_source_id = s.id AND status = 'confirmed'), 0) as volume,
+           COALESCE((SELECT SUM(amount_minor) FROM transactions WHERE payment_source_id = s.id AND status = 'confirmed'), 0) / 100.0 as volume,
            COALESCE((SELECT COUNT(*) FROM transactions WHERE payment_source_id = s.id AND status = 'confirmed'), 0) as txnsCount
     FROM payment_sources s
     WHERE s.organization_id = ? AND s.retired_at IS NULL
@@ -960,17 +1220,25 @@ apiRouter.get('/rails', requireAuth, (req: AuthenticatedUserRequest, res: Respon
 
   const totalVol = rows.reduce((acc, r) => acc + (r.volume || 0), 0) || 1;
 
-  const result = rows.map((r) => ({
-    ...r,
-    sharePercentage: Math.round(((r.volume || 0) / totalVol) * 100),
-    isPaused: Boolean(r.isPaused),
-    color: r.provider === 'vodafone_cash' ? '#1e3a8a' : r.provider === 'instapay' ? '#00285e' : r.provider === 'orange_cash' ? '#565e74' : '#00236f',
-  }));
+  const result = rows.map((r) => {
+    const usage = getCurrentSourceUsage(db, r.id);
+    return {
+      ...r,
+      sharePercentage: Math.round(((r.volume || 0) / totalVol) * 100),
+      dailyIntake: usage.daily.intake,
+      monthlyIntake: usage.monthly.intake,
+      dailyPercentage: usage.daily.percentage,
+      monthlyPercentage: usage.monthly.percentage,
+      usagePeriodKeys: usage.periodKeys,
+      isPaused: Boolean(r.isPaused),
+      color: r.provider === 'vodafone_cash' ? '#1e3a8a' : r.provider === 'instapay' ? '#00285e' : r.provider === 'orange_cash' ? '#565e74' : '#00236f',
+    };
+  });
 
   res.json(result);
 });
 
-apiRouter.post('/rails/:id/toggle-pause', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+apiRouter.post('/rails/:id/toggle-pause', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const current = db.prepare('SELECT is_paused_for_new_instructions FROM payment_sources WHERE id = ? AND organization_id = ?').get(req.params.id, req.user!.organizationId) as any;
   if (!current) {
@@ -978,7 +1246,7 @@ apiRouter.post('/rails/:id/toggle-pause', requireAuth, (req: AuthenticatedUserRe
     return;
   }
   const nextState = current.is_paused_for_new_instructions ? 0 : 1;
-  db.prepare('UPDATE payment_sources SET is_paused_for_new_instructions = ? WHERE id = ?').run(nextState, req.params.id);
+  db.prepare('UPDATE payment_sources SET is_paused_for_new_instructions = ? WHERE id = ? AND organization_id = ?').run(nextState, req.params.id, req.user!.organizationId);
   res.json({ id: req.params.id, isPaused: Boolean(nextState) });
 });
 
@@ -989,7 +1257,7 @@ apiRouter.post('/rails/:id/toggle-pause', requireAuth, (req: AuthenticatedUserRe
 apiRouter.get('/devices', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const rows = db.prepare(`
-    SELECT d.id, d.device_number, d.friendly_name, d.location, d.adapter_type, d.status,
+    SELECT d.id, d.payment_source_id, d.device_number, d.friendly_name, d.location, d.adapter_type, d.status,
            d.battery_level, d.last_seen_at, d.agent_version, d.config_version,
            d.verified_at, d.notification_listener_granted, d.battery_optimization_exempt,
            (SELECT COUNT(*) FROM transactions t WHERE t.organization_id = d.organization_id) as txns_count
@@ -1000,8 +1268,8 @@ apiRouter.get('/devices', requireAuth, (req: AuthenticatedUserRequest, res: Resp
   res.json(rows);
 });
 
-// Device Telemetry Heartbeat & Permissions Verification (Proof from real device)
-apiRouter.post('/devices/:id/telemetry', (req: Request, res: Response) => {
+// Device Telemetry Heartbeat & Permissions Verification (signed by the paired device)
+apiRouter.post('/devices/:id/telemetry', verifyDeviceSignature, (req: AuthenticatedDeviceRequest, res: Response) => {
   const { id } = req.params;
   const {
     battery_level,
@@ -1010,16 +1278,47 @@ apiRouter.post('/devices/:id/telemetry', (req: Request, res: Response) => {
     agent_version,
   } = req.body;
 
-  const db = getDatabase();
-  const dev = db.prepare('SELECT id, organization_id FROM devices WHERE id = ?').get(id) as any;
-  if (!dev) {
-    res.status(404).json({ error: 'DEVICE_NOT_FOUND', message: 'Device not registered' });
+  const deviceCtx = req.deviceContext!;
+  if (deviceCtx.deviceId !== id) {
+    res.status(403).json({ error: 'DEVICE_ID_MISMATCH', message: 'A device may update only its own telemetry.' });
     return;
   }
+
+  const db = getDatabase();
 
   const listenerGranted = notification_listener_granted === true || notification_listener_granted === 1 ? 1 : 0;
   const batteryExempt = battery_optimization_exempt === true || battery_optimization_exempt === 1 ? 1 : 0;
   const battery = typeof battery_level === 'number' ? battery_level : 100;
+
+  if (!Number.isFinite(battery) || battery < 0 || battery > 100) {
+    res.status(400).json({ error: 'INVALID_BATTERY_LEVEL', message: 'Battery level must be between 0 and 100.' });
+    return;
+  }
+
+  // Persist the signed nonce for telemetry too, so a captured heartbeat cannot
+  // be replayed to overwrite the latest device state.
+  const telemetryNonce = req.header('X-Nonce')!;
+  try {
+    db.prepare(`
+      INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'telemetry')
+    `).run(
+      `raw_telemetry_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      deviceCtx.organizationId,
+      deviceCtx.deviceId,
+      deviceCtx.adapterType,
+      telemetryNonce,
+      new Date().toISOString(),
+      typeof (req as any).rawBody === 'string' ? (req as any).rawBody : JSON.stringify(req.body || {})
+    );
+  } catch (err: any) {
+    if (String(err?.message || '').includes('UNIQUE constraint failed')) {
+      res.status(409).json({ error: 'REPLAYED_NONCE', message: 'This signed telemetry event was already received.' });
+      return;
+    }
+    res.status(500).json({ error: 'TELEMETRY_PERSIST_FAILED', message: 'Unable to record signed telemetry.' });
+    return;
+  }
 
   db.prepare(`
     UPDATE devices
@@ -1030,11 +1329,11 @@ apiRouter.post('/devices/:id/telemetry', (req: Request, res: Response) => {
         verified_at = datetime('now'),
         last_seen_at = datetime('now'),
         agent_version = COALESCE(?, agent_version)
-    WHERE id = ?
-  `).run(battery, listenerGranted, batteryExempt, agent_version || null, id);
+    WHERE id = ? AND organization_id = ?
+  `).run(battery, listenerGranted, batteryExempt, agent_version || null, id, deviceCtx.organizationId);
 
   AuditService.record({
-    organizationId: dev.organization_id,
+    organizationId: deviceCtx.organizationId,
     actorIdentity: `Device:${id}`,
     action: 'DEVICE_TELEMETRY_AND_PERMISSIONS_VERIFIED',
     resourceType: 'device',
@@ -1053,9 +1352,9 @@ apiRouter.post('/devices/:id/telemetry', (req: Request, res: Response) => {
 
 // Register New Device & Generate 15-Minute One-Time Pairing Token
 apiRouter.post('/devices', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
-  const { deviceIdentifier, friendlyName, location, adapterType } = req.body;
-  if (!deviceIdentifier || !friendlyName) {
-    res.status(400).json({ error: 'MISSING_FIELDS', message: 'Device identifier and friendly name required' });
+  const { deviceIdentifier, friendlyName, location, adapterType, paymentSourceId } = req.body;
+  if (!deviceIdentifier || !friendlyName || !paymentSourceId) {
+    res.status(400).json({ error: 'MISSING_FIELDS', message: 'Device identifier, friendly name, and receiving source are required' });
     return;
   }
 
@@ -1066,6 +1365,16 @@ apiRouter.post('/devices', requireAuth, requireRole(['owner', 'admin']), (req: A
 
   db.exec('BEGIN IMMEDIATE;');
   try {
+    const source = db.prepare(`
+      SELECT id FROM payment_sources
+      WHERE id = ? AND organization_id = ? AND retired_at IS NULL
+    `).get(paymentSourceId, req.user!.organizationId) as any;
+    if (!source) {
+      db.exec('ROLLBACK;');
+      res.status(422).json({ error: 'INVALID_PAYMENT_SOURCE', message: 'Select an active receiving source owned by this workspace.' });
+      return;
+    }
+
     const limitCheck = SubscriptionService.checkDeviceLimit(req.user!.organizationId);
     if (!limitCheck.allowed) {
       db.exec('ROLLBACK;');
@@ -1083,15 +1392,15 @@ apiRouter.post('/devices', requireAuth, requireRole(['owner', 'admin']), (req: A
     }
 
     db.prepare(`
-      INSERT INTO devices (id, organization_id, device_number, friendly_name, location, adapter_type, status, battery_level, agent_version)
-      VALUES (?, ?, ?, ?, ?, ?, 'offline', 100, 'v3.4.1-eg')
-    `).run(deviceId, req.user!.organizationId, deviceIdentifier.trim(), friendlyName.trim(), location || 'Mobile Terminal', adapterType || 'macrodroid');
+      INSERT INTO devices (id, organization_id, payment_source_id, device_number, friendly_name, location, adapter_type, status, battery_level, agent_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'offline', 100, 'unpaired')
+    `).run(deviceId, req.user!.organizationId, paymentSourceId, deviceIdentifier.trim(), friendlyName.trim(), location || 'Mobile Terminal', adapterType || 'macrodroid');
 
     // Create temporary pairing token
     db.prepare(`
-      INSERT INTO pairing_tokens (token, organization_id, device_identifier, expires_at)
-      VALUES (?, ?, ?, ?)
-    `).run(pairingCode, req.user!.organizationId, deviceId, expiresAt);
+      INSERT INTO pairing_tokens (token, organization_id, device_identifier, allowed_source_id, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(hashOpaqueToken(pairingCode), req.user!.organizationId, deviceId, paymentSourceId, expiresAt);
 
     AuditService.record({
       organizationId: req.user!.organizationId,
@@ -1100,7 +1409,7 @@ apiRouter.post('/devices', requireAuth, requireRole(['owner', 'admin']), (req: A
       resourceType: 'device',
       resourceId: deviceId,
       originIp: req.ip,
-      details: { pairingCode, expiresAt },
+      details: { expiresAt, paymentSourceId },
     });
 
     db.exec('COMMIT;');
@@ -1116,79 +1425,86 @@ apiRouter.post('/devices', requireAuth, requireRole(['owner', 'admin']), (req: A
     });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'DEVICE_REGISTRATION_FAILED', message: err.message });
+    res.status(500).json({ error: 'DEVICE_REGISTRATION_FAILED', message: 'Unable to register the device at this time.' });
   }
 });
 
 // Device Pairing Handshake (Executed by mobile adapter)
 apiRouter.post('/devices/pair', (req: Request, res: Response) => {
-  const { pairing_token, device_identifier, device_hardware_model, adapter_type } = req.body;
+  const { pairing_token } = req.body;
   if (!pairing_token) {
     res.status(400).json({ error: 'PAIRING_TOKEN_REQUIRED' });
     return;
   }
 
   const db = getDatabase();
-  const tokenRow = db.prepare(`
-    SELECT organization_id, device_identifier, expires_at, used_at FROM pairing_tokens WHERE token = ?
-  `).get(pairing_token) as any;
-
-  if (!tokenRow || tokenRow.used_at || new Date() > new Date(tokenRow.expires_at)) {
-    res.status(400).json({ error: 'INVALID_OR_EXPIRED_PAIRING_TOKEN', message: 'Token has expired. Generate a new pairing code in dashboard.' });
-    return;
-  }
-
-  const orgId = tokenRow.organization_id;
-  const deviceId = tokenRow.device_identifier.startsWith('dev_') ? tokenRow.device_identifier : `dev_${Date.now()}`;
-  const hmacSecret = `sec_${crypto.randomBytes(32).toString('hex')}`;
-
   db.exec('BEGIN IMMEDIATE;');
   try {
-    const existingDev = db.prepare('SELECT id FROM devices WHERE id = ?').get(deviceId);
-    if (!existingDev) {
-      const limitCheck = SubscriptionService.checkDeviceLimit(orgId);
-      if (!limitCheck.allowed) {
-        db.exec('ROLLBACK;');
-        const isExpired = limitCheck.subscriptionStatus === 'trial_expired' || limitCheck.subscriptionStatus === 'expired';
-        res.status(403).json({
-          error: isExpired ? 'TRIAL_EXPIRED' : 'PLAN_DEVICE_LIMIT_EXCEEDED',
-          message: isExpired
-            ? 'انتهت فترة التجربة المجانية لمساحة العمل. يرجى الاشتراك في إحدى الباقات للاستمرار في ربط أجهزة جديدة.'
-            : `Organization has reached its plan device limit of ${limitCheck.maxLimit} devices. Upgrade plan to pair more devices.`,
-        });
-        return;
-      }
+    const tokenHash = hashOpaqueToken(pairing_token);
+    const tokenRow = db.prepare(`
+      SELECT organization_id, device_identifier, allowed_source_id, expires_at, used_at
+      FROM pairing_tokens WHERE token = ?
+    `).get(tokenHash) as any;
+
+    if (!tokenRow || tokenRow.used_at || new Date() > new Date(tokenRow.expires_at) || !tokenRow.allowed_source_id) {
+      db.exec('ROLLBACK;');
+      res.status(400).json({ error: 'INVALID_OR_EXPIRED_PAIRING_TOKEN', message: 'Token has expired or has already been used. Generate a new pairing code in dashboard.' });
+      return;
     }
 
-    db.prepare('UPDATE pairing_tokens SET used_at = datetime("now") WHERE token = ?').run(pairing_token);
+    const device = db.prepare(`
+      SELECT id, organization_id, payment_source_id, status
+      FROM devices WHERE id = ? AND organization_id = ?
+    `).get(tokenRow.device_identifier, tokenRow.organization_id) as any;
+    const source = db.prepare(`
+      SELECT id FROM payment_sources
+      WHERE id = ? AND organization_id = ? AND retired_at IS NULL
+    `).get(tokenRow.allowed_source_id, tokenRow.organization_id) as any;
+
+    if (!device || device.status === 'revoked' || device.payment_source_id !== tokenRow.allowed_source_id || !source) {
+      db.exec('ROLLBACK;');
+      res.status(409).json({ error: 'PAIRING_BINDING_INVALID', message: 'The device or its bound receiving source is no longer eligible for pairing.' });
+      return;
+    }
+
+    const consumed = db.prepare(`
+      UPDATE pairing_tokens SET used_at = datetime('now')
+      WHERE token = ? AND used_at IS NULL
+    `).run(tokenHash);
+    if (consumed.changes !== 1) {
+      db.exec('ROLLBACK;');
+      res.status(409).json({ error: 'PAIRING_TOKEN_ALREADY_USED', message: 'This pairing code was already consumed.' });
+      return;
+    }
+
+    const hmacSecret = `sec_${crypto.randomBytes(32).toString('hex')}`;
 
     // Provision or update device credentials
     db.prepare(`
       INSERT INTO device_credentials (device_id, hmac_secret)
       VALUES (?, ?)
       ON CONFLICT(device_id) DO UPDATE SET hmac_secret = excluded.hmac_secret, revoked_at = NULL
-    `).run(deviceId, hmacSecret);
+    `).run(device.id, hmacSecret);
 
-    db.prepare(`UPDATE devices SET status = 'online', last_seen_at = datetime('now') WHERE id = ?`).run(deviceId);
+    db.prepare(`UPDATE devices SET status = 'online', last_seen_at = datetime('now') WHERE id = ?`).run(device.id);
 
     db.exec('COMMIT;');
 
     res.status(201).json({
       status: 'paired',
-      device_id: deviceId,
+      device_id: device.id,
       hmac_secret: hmacSecret,
-      organization_id: orgId,
       ingestion_endpoint: '/api/v1/devices/ingest',
     });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'PAIRING_FAILED', message: err.message });
+    res.status(500).json({ error: 'PAIRING_FAILED', message: 'Unable to pair the device at this time.' });
   }
 });
 
 // Real Cryptographic Ingestion Endpoint (HMAC-SHA256 Protected!)
 apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDeviceRequest, res: Response) => {
-  const { raw_content, provider_hint, bound_payment_address, device_captured_at, client_event_id } = req.body;
+  const { raw_content, provider_hint, device_captured_at } = req.body;
   const deviceCtx = req.deviceContext!;
   const nonce = req.header('X-Nonce')!;
   const signature = req.header('X-Signature')!;
@@ -1200,6 +1516,39 @@ apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDevi
 
   const db = getDatabase();
   const rawEventId = `raw_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+  // Device binding is assigned by an owner/admin during registration.  Never
+  // infer a source from a sender label, a request field, or SMS text.
+  if (!deviceCtx.paymentSourceId) {
+    try {
+      db.prepare(`
+        INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'review_required_source_binding')
+      `).run(
+        rawEventId,
+        deviceCtx.organizationId,
+        deviceCtx.deviceId,
+        deviceCtx.adapterType,
+        nonce,
+        device_captured_at || new Date().toISOString(),
+        raw_content
+      );
+    } catch (err: any) {
+      if (String(err?.message || '').includes('UNIQUE constraint failed')) {
+        res.status(409).json({ error: 'REPLAYED_NONCE', message: 'This signed event was already received.' });
+        return;
+      }
+      res.status(500).json({ error: 'RAW_EVENT_PERSIST_FAILED', message: 'Unable to record the signed event.' });
+      return;
+    }
+
+    res.status(422).json({
+      error: 'DEVICE_SOURCE_UNBOUND',
+      message: 'This capture device is not bound to an active receiving source.',
+      raw_event_id: rawEventId,
+    });
+    return;
+  }
 
   // Check subscription / trial entitlement for customer tenants
   if (deviceCtx.organizationId !== 'org_platform_ops') {
@@ -1252,18 +1601,27 @@ apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDevi
   }
 
   // 1. Commit Raw Event Immutably Before Processing
-  db.prepare(`
-    INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')
-  `).run(
-    rawEventId,
-    deviceCtx.organizationId,
-    deviceCtx.deviceId,
-    deviceCtx.adapterType,
-    nonce,
-    device_captured_at || new Date().toISOString(),
-    raw_content
-  );
+  try {
+    db.prepare(`
+      INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')
+    `).run(
+      rawEventId,
+      deviceCtx.organizationId,
+      deviceCtx.deviceId,
+      deviceCtx.adapterType,
+      nonce,
+      device_captured_at || new Date().toISOString(),
+      raw_content
+    );
+  } catch (err: any) {
+    if (String(err?.message || '').includes('UNIQUE constraint failed')) {
+      res.status(409).json({ error: 'REPLAYED_NONCE', message: 'This signed event was already received.' });
+      return;
+    }
+    res.status(500).json({ error: 'RAW_EVENT_PERSIST_FAILED', message: 'Unable to record the signed event.' });
+    return;
+  }
 
   // 2. Parse Incoming Payload with Egyptian Telecom Engine
   const parsed = parseEgyptianPaymentMessage(raw_content, provider_hint);
@@ -1286,33 +1644,19 @@ apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDevi
   const result = ReconciliationService.processInboundTransaction({
     organizationId: deviceCtx.organizationId,
     deviceId: deviceCtx.deviceId,
+    paymentSourceId: deviceCtx.paymentSourceId,
     rawEventId,
     adapterType: deviceCtx.adapterType,
-    boundPaymentAddress: bound_payment_address || '',
+    boundPaymentAddress: '',
     parsed,
     financialEventAt: device_captured_at || new Date().toISOString(),
     signature,
   });
 
-  // 4. Update Limit Usage If Confirmed
-  if (result.status === 'confirmed') {
-    LimitEngine.recordTurnover(deviceCtx.organizationId, 'src_vf', parsed.amount, device_captured_at);
-
-    // If inbound payment arrived on platform operations tenant, attempt automatic subscription order matching!
-    if (deviceCtx.organizationId === 'org_platform_ops') {
-      try {
-        SubscriptionService.handleInboundPlatformTransaction({
-          id: result.transactionId,
-          amount: parsed.amount,
-          externalTrxId: parsed.externalTrxId,
-          senderPhone: parsed.senderPhone,
-          senderName: parsed.senderName,
-        });
-      } catch (subErr) {
-        console.error('Subscription auto-matching error:', subErr);
-      }
-    }
-  }
+  // Reconciliation persists any ledger movement, source usage, alert jobs, and
+  // customer webhook job atomically. A signed SMS capture does not supply
+  // independent settlement proof, so this device-only route normally returns
+  // review_required until a documented operator verification occurs.
 
   // Return Duplicate Acknowledged if already seen
   if (result.isDuplicate) {
@@ -1339,277 +1683,28 @@ apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDevi
   });
 });
 
-// Simple Mobile Webhook Ingestion (For MacroDroid, Tasker, Apple Shortcuts, and Direct Webhooks)
-apiRouter.post('/devices/webhook-ingest', (req: Request, res: Response) => {
-  const token = (req.query.token as string) || req.header('X-Device-Token') || req.body?.token || req.body?.pairing_code || req.body?.pairing_token;
-
-  // Extract raw content
-  let rawContent: string = '';
-  if (typeof req.body === 'string') {
-    rawContent = req.body;
-  } else if (req.body && typeof req.body === 'object') {
-    rawContent =
-      req.body.sms_message ||
-      req.body.raw_content ||
-      req.body.message ||
-      req.body.sms_body ||
-      req.body.text ||
-      req.body.body ||
-      req.body.content ||
-      '';
-  } else if ((req as any).rawBody) {
-    rawContent = (req as any).rawBody;
-  }
-
-  // Regex fallback if rawContent starts with '{' or is inside rawBody (e.g. malformed JSON with unescaped newlines)
-  if ((!rawContent || rawContent.trim().startsWith('{')) && (req as any).rawBody) {
-    const raw = (req as any).rawBody as string;
-    const msgMatch =
-      raw.match(/"sms_message"\s*:\s*"([\s\S]*?)"\s*,\s*"/i) ||
-      raw.match(/"sms_message"\s*:\s*"([\s\S]*?)"\s*}/i) ||
-      raw.match(/"raw_content"\s*:\s*"([\s\S]*?)"\s*,\s*"/i);
-    if (msgMatch) {
-      rawContent = msgMatch[1];
-    }
-  }
-
-  // Also check query params if not found in body
-  if (!rawContent && typeof req.query.sms_message === 'string') rawContent = req.query.sms_message;
-  if (!rawContent && typeof req.query.message === 'string') rawContent = req.query.message;
-  if (!rawContent && typeof req.query.raw_content === 'string') rawContent = req.query.raw_content;
-  if (!rawContent && typeof req.query.text === 'string') rawContent = req.query.text;
-
-  // Extract sender
-  let sender = 'Unknown';
-  if (req.body && typeof req.body === 'object') {
-    sender =
-      req.body.sms_number ||
-      req.body.sender ||
-      req.body.from ||
-      req.body.sms_name ||
-      req.body.sender_identity ||
-      'Unknown';
-  }
-  if (sender === 'Unknown' && (req as any).rawBody) {
-    const numMatch = ((req as any).rawBody as string).match(/"sms_number"\s*:\s*"([^"]+)"/i);
-    if (numMatch) sender = numMatch[1];
-  }
-  if (sender === 'Unknown' && typeof req.query.sms_number === 'string') sender = req.query.sms_number;
-  if (sender === 'Unknown' && typeof req.query.sender === 'string') sender = req.query.sender;
-  if (sender === 'Unknown' && typeof req.query.from === 'string') sender = req.query.from;
-  const providerHint = (req.query.provider_hint as string) || req.body?.provider_hint;
-
-  // Extract Battery & Device Telemetry (from MacroDroid Magic Text)
-  let batteryLevel: number | null = null;
-  const rawBat = req.body?.battery ?? req.query?.battery;
-  if (rawBat !== undefined && rawBat !== null && rawBat !== '') {
-    const parsedBat = parseInt(String(rawBat), 10);
-    if (!isNaN(parsedBat)) batteryLevel = parsedBat;
-  }
-  if (batteryLevel === null && (req as any).rawBody) {
-    const batMatch = ((req as any).rawBody as string).match(/"battery"\s*:\s*"?(\d+)"?/i);
-    if (batMatch) batteryLevel = parseInt(batMatch[1], 10);
-  }
-
-  let deviceModel = (req.body?.device_model || req.query?.device_model || '') as string;
-  if (!deviceModel && (req as any).rawBody) {
-    const modelMatch = ((req as any).rawBody as string).match(/"device_model"\s*:\s*"([^"]+)"/i);
-    if (modelMatch) deviceModel = modelMatch[1];
-  }
-  if (deviceModel === '{device_model}') deviceModel = '';
-
-  let powerStatus = (req.body?.power || req.query?.power || '') as string;
-  if (!powerStatus && (req as any).rawBody) {
-    const pwrMatch = ((req as any).rawBody as string).match(/"power"\s*:\s*"([^"]+)"/i);
-    if (pwrMatch) powerStatus = pwrMatch[1];
-  }
-  if (powerStatus === '{power}') powerStatus = '';
-
-  let simName = (req.body?.sms_sim_name || req.query?.sms_sim_name || '') as string;
-  if (!simName && (req as any).rawBody) {
-    const simMatch = ((req as any).rawBody as string).match(/"sms_sim_name"\s*:\s*"([^"]+)"/i);
-    if (simMatch) simName = simMatch[1];
-  }
-  if (simName === '{sms_sim_name}') simName = '';
-
-  console.log(
-    `[WebhookIngest] Received webhook: token=${token}, sender=${sender}, battery=${batteryLevel}%, model=${deviceModel}, length=${rawContent?.length}`
-  );
-
-  if (!token) {
-    res.status(401).json({
-      error: 'TOKEN_REQUIRED',
-      message: 'Device pairing token or secret token is required (via ?token= or JSON body)',
-    });
-    return;
-  }
-
-  if (!rawContent || rawContent.trim() === '') {
-    res.status(400).json({
-      error: 'MISSING_CONTENT',
-      message: 'raw_content or message string is required',
-    });
-    return;
-  }
-
-  const db = getDatabase();
-
-  // 1. Resolve Device & Organization:
-  let orgId: string | null = null;
-  let deviceId: string | null = null;
-
-  const pairTokenRow = db.prepare(`
-    SELECT organization_id, device_identifier, expires_at, used_at
-    FROM pairing_tokens WHERE token = ?
-  `).get(token) as any;
-
-  if (pairTokenRow) {
-    orgId = pairTokenRow.organization_id;
-    deviceId = pairTokenRow.device_identifier;
-  } else {
-    const devRow = db.prepare(`
-      SELECT d.id, d.organization_id, d.status, c.revoked_at
-      FROM devices d
-      LEFT JOIN device_credentials c ON d.id = c.device_id
-      WHERE d.id = ? OR c.hmac_secret = ?
-    `).get(token, token) as any;
-
-    if (devRow) {
-      if (devRow.status === 'revoked' || devRow.revoked_at) {
-        res.status(403).json({ error: 'REVOKED_DEVICE', message: 'Device credentials have been revoked.' });
-        return;
-      }
-      orgId = devRow.organization_id;
-      deviceId = devRow.id;
-    }
-  }
-
-  if (!orgId || !deviceId) {
-    res.status(401).json({
-      error: 'INVALID_TOKEN',
-      message: 'Device token or pairing code is invalid or expired. Check dashboard for active code.',
-    });
-    return;
-  }
-
-  // Update device status and battery / hardware telemetry
-  try {
-    const telemetryObj = {
-      battery: batteryLevel,
-      device_model: deviceModel || undefined,
-      power: powerStatus || undefined,
-      sim_name: simName || undefined,
-      last_updated: new Date().toISOString(),
-    };
-    if (batteryLevel !== null) {
-      db.prepare(`
-        UPDATE devices 
-        SET status = 'online', 
-            last_seen_at = datetime('now'),
-            battery_level = ?,
-            last_telemetry_payload = ?
-        WHERE id = ?
-      `).run(batteryLevel, JSON.stringify(telemetryObj), deviceId);
-    } else {
-      db.prepare(`
-        UPDATE devices 
-        SET status = 'online', 
-            last_seen_at = datetime('now'),
-            last_telemetry_payload = ?
-        WHERE id = ?
-      `).run(JSON.stringify(telemetryObj), deviceId);
-    }
-  } catch (tErr) {
-    console.error('Error updating device telemetry:', tErr);
-  }
-
-  // 2. Check subscription / trial status
-  if (orgId !== 'org_platform_ops') {
-    const sub = SubscriptionService.getOrganizationSubscription(orgId);
-    if (sub.status === 'trial_expired' || sub.status === 'expired') {
-      res.status(403).json({
-        error: 'TRIAL_EXPIRED',
-        message: 'انتهت فترة التجربة المجانية لمساحة العمل. يرجى الاشتراك للاستمرار.',
-      });
-      return;
-    }
-  }
-
-  // 3. Save raw event
-  const rawEventId = `raw_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  const nonce = `wh_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-
-  db.prepare(`
-    INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
-    VALUES (?, ?, ?, 'macrodroid_webhook', ?, datetime('now'), ?, 'processing')
-  `).run(rawEventId, orgId, deviceId, nonce, rawContent);
-
-  // 4. Parse using Egyptian parser
-  const parsed = parseEgyptianPaymentMessage(rawContent, providerHint);
-
-  // Smart Filter: Filter out non-financial messages (Personal SMS, Promos, OTP codes, Outbound debits)
-  if (!parsed.isFinancialTransaction) {
-    db.prepare(`UPDATE raw_events SET processing_status = ? WHERE id = ?`).run('filtered_' + parsed.messageCategory, rawEventId);
-
-    console.log(`[WebhookIngest:Filter] Non-financial SMS filtered out. Category=${parsed.messageCategory}, Reason=${parsed.ignoreReason}`);
-
-    res.status(200).json({
-      status: 'filtered',
-      category: parsed.messageCategory,
-      reason: parsed.ignoreReason || 'Non-financial message filtered out automatically',
-      raw_event_id: rawEventId,
-      message: 'تم استلام الرسالة وتصفيتها تلقائياً (ليست معاملة تحويل مالي واردة).',
-    });
-    return;
-  }
-
-  // 5. Reconcile
-  const result = ReconciliationService.processInboundTransaction({
-    organizationId: orgId,
-    deviceId,
-    rawEventId,
-    adapterType: 'macrodroid_webhook',
-    boundPaymentAddress: sender,
-    parsed,
-    financialEventAt: new Date().toISOString(),
-    signature: 'webhook_token_verified',
-  });
-
-  // 6. Update Turnover Limits
-  if (result.status === 'confirmed') {
-    LimitEngine.recordTurnover(orgId, 'src_vf', parsed.amount);
-
-    if (orgId === 'org_platform_ops') {
-      try {
-        SubscriptionService.handleInboundPlatformTransaction({
-          id: result.transactionId,
-          amount: parsed.amount,
-          externalTrxId: parsed.externalTrxId,
-          senderPhone: parsed.senderPhone,
-          senderName: parsed.senderName,
-        });
-      } catch (subErr) {
-        console.error('Subscription auto-matching error:', subErr);
-      }
-    }
-  }
-
-  res.status(200).json({
-    status: 'accepted',
-    raw_event_id: rawEventId,
-    transaction_id: result.transactionId,
-    reconciliation_status: result.status,
-    amount: parsed.amount,
-    provider: parsed.provider,
-    is_duplicate: result.isDuplicate,
-    message: result.isDuplicate ? 'Transaction already committed.' : 'Payment captured and processed successfully.',
+// The old webhook accepted pairing codes and device secrets in URLs/bodies.  It
+// is deliberately retired: all adapters must pair once and use /devices/ingest
+// with HMAC, timestamp, nonce, and the device-bound source.
+apiRouter.post('/devices/webhook-ingest', (_req: Request, res: Response) => {
+  res.status(410).json({
+    error: 'LEGACY_WEBHOOK_RETIRED',
+    message: 'This ingestion path was retired for security. Pair the device again and use the signed /devices/ingest protocol.',
   });
 });
 
+
 apiRouter.post('/devices/:id/revoke', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
-  db.prepare(`UPDATE devices SET status = 'revoked' WHERE id = ? AND organization_id = ?`).run(req.params.id, req.user!.organizationId);
-  db.prepare(`UPDATE device_credentials SET revoked_at = datetime('now') WHERE device_id = ?`).run(req.params.id);
+  const revoked = db.prepare(`UPDATE devices SET status = 'revoked' WHERE id = ? AND organization_id = ?`).run(req.params.id, req.user!.organizationId);
+  if (revoked.changes !== 1) {
+    res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+  db.prepare(`
+    UPDATE device_credentials SET revoked_at = datetime('now')
+    WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE organization_id = ?)
+  `).run(req.params.id, req.user!.organizationId);
 
   AuditService.record({
     organizationId: req.user!.organizationId,
@@ -1623,7 +1718,7 @@ apiRouter.post('/devices/:id/revoke', requireAuth, requireRole(['owner', 'admin'
   res.json({ message: 'Device credentials permanently revoked' });
 });
 
-apiRouter.post('/devices/:id/toggle', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+apiRouter.post('/devices/:id/toggle', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const current = db.prepare('SELECT status FROM devices WHERE id = ? AND organization_id = ?').get(req.params.id, req.user!.organizationId) as any;
   if (!current) {
@@ -1631,7 +1726,7 @@ apiRouter.post('/devices/:id/toggle', requireAuth, (req: AuthenticatedUserReques
     return;
   }
   const nextStatus = current.status === 'online' ? 'offline' : 'online';
-  db.prepare(`UPDATE devices SET status = ?, last_seen_at = datetime('now') WHERE id = ?`).run(nextStatus, req.params.id);
+  db.prepare(`UPDATE devices SET status = ?, last_seen_at = datetime('now') WHERE id = ? AND organization_id = ?`).run(nextStatus, req.params.id, req.user!.organizationId);
   res.json({ id: req.params.id, status: nextStatus });
 });
 
@@ -1644,10 +1739,10 @@ apiRouter.get('/transactions', requireAuth, (req: AuthenticatedUserRequest, res:
   const { status, provider, search } = req.query;
 
   let query = `
-    SELECT t.id, t.external_trx_id as trxId, t.amount, t.currency, t.provider,
+    SELECT t.id, t.external_trx_id as trxId, t.amount_minor / 100.0 as amount, t.currency, t.provider,
            t.sender_name as senderName, t.sender_phone as senderPhone, t.status,
            t.reconciliation_state, t.provenance_confidence as confidenceScore,
-           t.review_reason as reviewReason, t.stated_balance_after as balanceAfter,
+           t.review_reason as reviewReason, t.stated_balance_after_minor / 100.0 as balanceAfter,
            t.signature, t.financial_event_at as timestamp, r.raw_payload as rawMessage,
            d.device_number as deviceId, d.friendly_name as deviceName
     FROM transactions t
@@ -1678,7 +1773,7 @@ apiRouter.get('/transactions', requireAuth, (req: AuthenticatedUserRequest, res:
 });
 
 // View Raw & Filtered Messages Audit Log
-apiRouter.get('/raw-events', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+apiRouter.get('/raw-events', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
   const events = db.prepare(`
@@ -1694,49 +1789,110 @@ apiRouter.get('/raw-events', requireAuth, (req: AuthenticatedUserRequest, res: R
   res.json(events);
 });
 
-// Export & Download Live SQLite Database File (.db) for local inspection in DB Browser
-apiRouter.get('/system/download-db', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
-  const db = getDatabase();
-  try {
-    // Flush all pending WAL write-ahead logs into the main sqlite file
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
-  } catch (e) {
-    console.error('WAL checkpoint error before download:', e);
-  }
-
-  const finalPath = process.env.DATABASE_FILE || path.join(process.cwd(), 'data', 'sarraf_ops.db');
-  if (fs.existsSync(finalPath)) {
-    const dateStr = new Date().toISOString().slice(0, 10);
-    res.download(finalPath, `sarraf_ops_railway_${dateStr}.db`);
-  } else {
-    res.status(404).json({ error: 'DATABASE_NOT_FOUND', message: 'Database file not found on server.' });
-  }
+// Live database files contain every tenant's data and are never a customer export.
+apiRouter.get('/system/download-db', requireAuth, (_req: AuthenticatedUserRequest, res: Response) => {
+  res.status(410).json({
+    error: 'DATABASE_DOWNLOAD_RETIRED',
+    message: 'Live database downloads are disabled. Use a tenant-scoped export or an operator-managed backup procedure.',
+  });
 });
 
 // Operator Manual Approval of Review Item
 apiRouter.post('/transactions/:id/approve', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const { id } = req.params;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
 
-  const trx = db.prepare('SELECT id, balance_account_id, amount, stated_balance_after FROM transactions WHERE id = ? AND organization_id = ?').get(id, req.user!.organizationId) as any;
+  if (reason.length < 10) {
+    res.status(400).json({
+      error: 'VERIFICATION_REASON_REQUIRED',
+      message: 'Document the independent bank or wallet verification evidence before approving this transaction.',
+    });
+    return;
+  }
+
+  const trx = db.prepare(`
+    SELECT id, balance_account_id, payment_source_id, raw_event_id, amount_minor, currency,
+           provider, external_trx_id, stated_balance_after_minor, financial_event_at, status
+    FROM transactions
+    WHERE id = ? AND organization_id = ?
+  `).get(id, req.user!.organizationId) as any;
   if (!trx) {
     res.status(404).json({ error: 'TRANSACTION_NOT_FOUND' });
+    return;
+  }
+  if (trx.status !== 'review_required') {
+    res.status(409).json({
+      error: 'TRANSACTION_NOT_AWAITING_REVIEW',
+      message: 'Only a transaction currently awaiting review can be manually approved.',
+    });
     return;
   }
 
   db.exec('BEGIN IMMEDIATE;');
   try {
-    db.prepare(`
+    const account = db.prepare(`
+      SELECT current_balance_minor FROM balance_accounts
+      WHERE id = ? AND organization_id = ?
+    `).get(trx.balance_account_id, req.user!.organizationId) as any;
+    if (!account) {
+      throw new Error('BALANCE_ACCOUNT_NOT_FOUND');
+    }
+
+    const currentMinor = Number(account.current_balance_minor);
+    const amountMinor = Number(trx.amount_minor);
+    if (!Number.isSafeInteger(currentMinor) || !Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+      throw new Error('INVALID_TRANSACTION_AMOUNT');
+    }
+    const nextMinor = currentMinor + amountMinor;
+    if (trx.stated_balance_after_minor !== null && trx.stated_balance_after_minor !== undefined) {
+      if (Number(trx.stated_balance_after_minor) !== nextMinor) {
+        db.exec('ROLLBACK;');
+        res.status(409).json({
+          error: 'BALANCE_CHAIN_MISMATCH',
+          message: 'This transaction is still out of order against the current ledger. Resolve the balance chain or record a new verified checkpoint first.',
+        });
+        return;
+      }
+    }
+
+    const approved = db.prepare(`
       UPDATE transactions
-      SET status = 'confirmed', reconciliation_state = 'consistent', review_reason = 'Approved manually by operator: ' || ?
-      WHERE id = ?
-    `).run(req.user!.fullName, id);
+      SET status = 'confirmed', reconciliation_state = 'consistent', review_reason = ?
+      WHERE id = ? AND organization_id = ? AND status = 'review_required'
+    `).run(`Manually verified: ${reason}`, id, req.user!.organizationId);
+    if (approved.changes !== 1) {
+      throw new Error('TRANSACTION_REVIEW_STATE_CHANGED');
+    }
 
     db.prepare(`
       UPDATE balance_accounts
-      SET current_balance = current_balance + ?, version = version + 1, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(trx.amount, trx.balance_account_id);
+      SET current_balance_minor = ?, version = version + 1, updated_at = datetime('now')
+      WHERE id = ? AND organization_id = ?
+    `).run(nextMinor, trx.balance_account_id, req.user!.organizationId);
+
+    if (trx.raw_event_id) {
+      db.prepare(`
+        UPDATE raw_events SET processing_status = 'confirmed'
+        WHERE id = ? AND organization_id = ?
+      `).run(trx.raw_event_id, req.user!.organizationId);
+    }
+
+    LimitEngine.recordTurnoverInTransaction(
+      req.user!.organizationId,
+      trx.payment_source_id,
+      amountMinor,
+      trx.financial_event_at
+    );
+
+    ReconciliationService.enqueueConfirmedWebhook(db, req.user!.organizationId, {
+      id: trx.id,
+      external_trx_id: trx.external_trx_id,
+      amount_minor: amountMinor,
+      currency: trx.currency,
+      provider: trx.provider,
+      financial_event_at: trx.financial_event_at,
+    });
 
     AuditService.record({
       organizationId: req.user!.organizationId,
@@ -1745,14 +1901,14 @@ apiRouter.post('/transactions/:id/approve', requireAuth, requireRole(['owner', '
       resourceType: 'transaction',
       resourceId: id,
       originIp: req.ip,
-      details: { amount: trx.amount, reviewer: req.user!.fullName },
+      details: { amount: fromMinor(amountMinor), amountMinor, reviewer: req.user!.fullName, verificationReason: reason },
     });
 
     db.exec('COMMIT;');
-    res.json({ message: 'Transaction confirmed and balance ledger updated' });
+    res.json({ message: 'Transaction verified, ledger updated, and delivery queued.', balanceAfter: fromMinor(nextMinor) });
   } catch (err: any) {
-    db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'APPROVAL_FAILED', message: err.message });
+    try { db.exec('ROLLBACK;'); } catch {}
+    res.status(500).json({ error: 'APPROVAL_FAILED', message: 'Unable to approve the transaction at this time.' });
   }
 });
 
@@ -1760,12 +1916,27 @@ apiRouter.post('/transactions/:id/approve', requireAuth, requireRole(['owner', '
 apiRouter.post('/transactions/:id/reject', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const { id } = req.params;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (reason.length < 5) {
+    res.status(400).json({ error: 'REJECTION_REASON_REQUIRED', message: 'Document the rejection reason for the audit trail.' });
+    return;
+  }
+
+  const rejected = db.prepare(`
+    UPDATE transactions
+    SET status = 'failed', review_reason = ?
+    WHERE id = ? AND organization_id = ? AND status IN ('review_required', 'pending_ordering')
+  `).run(`Rejected by operator: ${reason}`, id, req.user!.organizationId);
+  if (rejected.changes !== 1) {
+    res.status(409).json({ error: 'TRANSACTION_NOT_REJECTABLE', message: 'Only a pending review or ordering item can be rejected.' });
+    return;
+  }
 
   db.prepare(`
-    UPDATE transactions
-    SET status = 'failed', review_reason = 'Rejected as suspicious by operator: ' || ?
-    WHERE id = ? AND organization_id = ?
-  `).run(req.user!.fullName, id, req.user!.organizationId);
+    UPDATE raw_events SET processing_status = 'failed'
+    WHERE organization_id = ?
+      AND id = (SELECT raw_event_id FROM transactions WHERE id = ? AND organization_id = ?)
+  `).run(req.user!.organizationId, id, req.user!.organizationId);
 
   AuditService.record({
     organizationId: req.user!.organizationId,
@@ -1774,6 +1945,7 @@ apiRouter.post('/transactions/:id/reject', requireAuth, requireRole(['owner', 'a
     resourceType: 'transaction',
     resourceId: id,
     originIp: req.ip,
+    details: { reason },
   });
 
   res.json({ message: 'Transaction flagged as rejected/failed' });
@@ -1783,7 +1955,7 @@ apiRouter.post('/transactions/:id/reject', requireAuth, requireRole(['owner', 'a
 // 6. AUDIT LOGS
 // ==========================================
 
-apiRouter.get('/audit', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+apiRouter.get('/audit', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
   const logs = AuditService.getLogs(req.user!.organizationId);
   res.json(logs);
 });
@@ -1823,7 +1995,7 @@ apiRouter.get('/subscriptions/current', requireAuth, (req: AuthenticatedUserRequ
 apiRouter.get('/subscriptions/orders', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const orders = db.prepare(`
-    SELECT * FROM subscription_orders
+    SELECT *, price_minor / 100.0 AS price_egp FROM subscription_orders
     WHERE organization_id = ?
     ORDER BY created_at DESC
   `).all(req.user!.organizationId);
@@ -1834,7 +2006,7 @@ apiRouter.get('/subscriptions/orders', requireAuth, (req: AuthenticatedUserReque
 apiRouter.get('/subscriptions/orders/:id', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const order = db.prepare(`
-    SELECT * FROM subscription_orders
+    SELECT *, price_minor / 100.0 AS price_egp FROM subscription_orders
     WHERE id = ? AND organization_id = ?
   `).get(req.params.id, req.user!.organizationId) as any;
 
@@ -1883,7 +2055,7 @@ apiRouter.post('/subscriptions/orders', requireAuth, requireRole(['owner', 'admi
       },
     });
   } catch (err: any) {
-    res.status(400).json({ error: 'CREATE_ORDER_FAILED', message: err.message });
+    res.status(400).json({ error: 'CREATE_ORDER_FAILED', message: 'Unable to create the subscription order at this time.' });
   }
 });
 
@@ -1908,7 +2080,7 @@ apiRouter.post('/subscriptions/orders/:id/report-payment', requireAuth, requireR
         : 'تم استلام بيانات التحويل، وجارٍ التحقق والمطابقة مع رسائل الاستقبال في حساب المنصة.',
     });
   } catch (err: any) {
-    res.status(400).json({ error: 'REPORT_PAYMENT_FAILED', message: err.message });
+    res.status(400).json({ error: 'REPORT_PAYMENT_FAILED', message: 'Unable to submit the payment report at this time.' });
   }
 });
 
@@ -1916,7 +2088,7 @@ apiRouter.post('/subscriptions/orders/:id/report-payment', requireAuth, requireR
 apiRouter.get('/subscriptions/receipts/:id', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const receipt = db.prepare(`
-    SELECT r.*, p.name_ar as plan_name_ar, p.name_en as plan_name_en, o.name as org_name, o.name_ar as org_name_ar
+    SELECT r.*, r.amount_paid_minor / 100.0 AS amount_paid, p.name_ar as plan_name_ar, p.name_en as plan_name_en, o.name as org_name, o.name_ar as org_name_ar
     FROM subscription_receipts r
     JOIN subscription_plans p ON r.plan_id = p.id
     JOIN organizations o ON r.organization_id = o.id
@@ -1963,7 +2135,7 @@ apiRouter.post('/subscriptions/select-active-devices', requireAuth, requireRole(
     res.json({ message: 'Active devices updated successfully.', activeCount: activeDeviceIds.length });
   } catch (err: any) {
     db.exec('ROLLBACK;');
-    res.status(500).json({ error: 'UPDATE_FAILED', message: err.message });
+    res.status(500).json({ error: 'UPDATE_FAILED', message: 'Unable to update platform settings at this time.' });
   }
 });
 
@@ -1975,7 +2147,7 @@ apiRouter.post('/subscriptions/select-active-devices', requireAuth, requireRole(
 apiRouter.get('/platform/overview', requireAuth, requirePlatformOwner, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
 
-  const revenueRow = db.prepare("SELECT COALESCE(SUM(amount_paid), 0) as totalRevenue FROM subscription_receipts").get() as any;
+  const revenueRow = db.prepare("SELECT COALESCE(SUM(amount_paid_minor), 0) / 100.0 as totalRevenue FROM subscription_receipts").get() as any;
   const activeSubsRow = db.prepare("SELECT COUNT(*) as count FROM organization_subscriptions WHERE status = 'active'").get() as any;
   const inReviewRow = db.prepare("SELECT COUNT(*) as count FROM subscription_orders WHERE status IN ('payment_reported', 'in_review')").get() as any;
   const totalOrdersRow = db.prepare("SELECT COUNT(*) as count FROM subscription_orders").get() as any;
@@ -2043,47 +2215,20 @@ apiRouter.post('/platform/settings', requireAuth, requirePlatformOwner, (req: Au
   res.json({ message: 'Platform settings updated successfully', instapay_number: cleanNum, beneficiary_name: cleanName });
 });
 
-// Platform Plans Management (View & Edit)
+// Platform plan terms are centrally defined product policy.  They are not
+// mutable through the dashboard because arbitrary price/device edits would
+// create a mismatch with checkout and entitlement enforcement.
 apiRouter.get('/platform/plans', requireAuth, requirePlatformOwner, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
-  const plans = db.prepare('SELECT * FROM subscription_plans ORDER BY price_egp ASC').all();
+  const plans = db.prepare('SELECT *, price_minor / 100.0 AS price_egp FROM subscription_plans ORDER BY price_minor ASC').all();
   res.json(plans);
 });
 
 apiRouter.post('/platform/plans/:id', requireAuth, requirePlatformOwner, (req: AuthenticatedUserRequest, res: Response) => {
-  const { nameEn, nameAr, priceEgp, deviceLimit, featuresJson, isActive } = req.body;
-  const db = getDatabase();
-
-  db.prepare(`
-    UPDATE subscription_plans
-    SET name_en = COALESCE(?, name_en),
-        name_ar = COALESCE(?, name_ar),
-        price_egp = COALESCE(?, price_egp),
-        device_limit = COALESCE(?, device_limit),
-        features_json = COALESCE(?, features_json),
-        is_active = COALESCE(?, is_active),
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(
-    nameEn || null,
-    nameAr || null,
-    priceEgp !== undefined ? Number(priceEgp) : null,
-    deviceLimit !== undefined ? Number(deviceLimit) : null,
-    featuresJson ? (typeof featuresJson === 'string' ? featuresJson : JSON.stringify(featuresJson)) : null,
-    isActive !== undefined ? (isActive ? 1 : 0) : null,
-    req.params.id
-  );
-
-  AuditService.record({
-    organizationId: 'org_platform_ops',
-    actorIdentity: req.user!.email,
-    action: 'SUBSCRIPTION_PLAN_MODIFIED',
-    resourceType: 'subscription_plan',
-    resourceId: req.params.id,
-    details: { priceEgp, deviceLimit, featuresJson },
+  res.status(405).json({
+    error: 'PLAN_TERMS_LOCKED',
+    message: 'Subscription prices, device limits, billing cycles, and included features are centrally controlled product terms.',
   });
-
-  res.json({ message: 'Plan updated successfully' });
 });
 
 // All Subscription Orders Across All Tenants
@@ -2092,7 +2237,7 @@ apiRouter.get('/platform/orders', requireAuth, requirePlatformOwner, (req: Authe
   const { status } = req.query;
 
   let query = `
-    SELECT o.*, org.name as org_name, org.name_ar as org_name_ar, u.email as user_email, u.full_name as user_full_name
+    SELECT o.*, o.price_minor / 100.0 AS price_egp, org.name as org_name, org.name_ar as org_name_ar, u.email as user_email, u.full_name as user_full_name
     FROM subscription_orders o
     JOIN organizations org ON o.organization_id = org.id
     JOIN users u ON o.user_id = u.id
@@ -2128,7 +2273,7 @@ apiRouter.post('/platform/orders/:id/approve', requireAuth, requirePlatformOwner
 
     res.json({ message: 'Order approved and subscription activated successfully' });
   } catch (err: any) {
-    res.status(400).json({ error: 'APPROVAL_FAILED', message: err.message });
+    res.status(400).json({ error: 'APPROVAL_FAILED', message: 'Unable to approve the subscription order at this time.' });
   }
 });
 
@@ -2149,7 +2294,7 @@ apiRouter.post('/platform/orders/:id/reject', requireAuth, requirePlatformOwner,
 
     res.json({ message: 'Order rejected successfully' });
   } catch (err: any) {
-    res.status(400).json({ error: 'REJECTION_FAILED', message: err.message });
+    res.status(400).json({ error: 'REJECTION_FAILED', message: 'Unable to reject the subscription order at this time.' });
   }
 });
 
@@ -2157,7 +2302,7 @@ apiRouter.post('/platform/orders/:id/reject', requireAuth, requirePlatformOwner,
 apiRouter.get('/platform/subscriptions', requireAuth, requirePlatformOwner, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const subs = db.prepare(`
-    SELECT s.*, org.name as org_name, org.name_ar as org_name_ar, p.name_ar as plan_name_ar, p.name_en as plan_name_en, p.price_egp
+    SELECT s.*, org.name as org_name, org.name_ar as org_name_ar, p.name_ar as plan_name_ar, p.name_en as plan_name_en, p.price_minor / 100.0 AS price_egp
     FROM organization_subscriptions s
     JOIN organizations org ON s.organization_id = org.id
     JOIN subscription_plans p ON s.plan_id = p.id
@@ -2170,7 +2315,7 @@ apiRouter.get('/platform/subscriptions', requireAuth, requirePlatformOwner, (req
 apiRouter.get('/platform/transactions', requireAuth, requirePlatformOwner, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const txs = db.prepare(`
-    SELECT t.*,
+    SELECT t.*, t.amount_minor / 100.0 AS amount, t.stated_balance_after_minor / 100.0 AS stated_balance_after,
            (SELECT order_number FROM subscription_orders WHERE matched_transaction_id = t.id LIMIT 1) as matched_order_number
     FROM transactions t
     WHERE t.organization_id = 'org_platform_ops'

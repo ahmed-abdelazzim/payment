@@ -232,7 +232,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
             </button>
 
             {/* Platform Owner Console (Protected for Platform Master) */}
-            {(currentUser?.isPlatformAdmin || currentUser?.email === 'aabdo6043@gmail.com' || workspace.id === 'org_platform_ops') && (
+            {currentUser?.isPlatformAdmin && (
               <button
                 onClick={() => {
                   onSelectTab('platform');

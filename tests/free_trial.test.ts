@@ -1,9 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { initTestDatabase, setDatabase } from '../server/db';
-import { SubscriptionService } from '../server/services/subscriptionService';
+import {
+  FREE_TRIAL_DURATION_HOURS,
+  FREE_TRIAL_PLAN_ID,
+  SubscriptionService,
+} from '../server/services/subscriptionService';
 
-test('Free Trial 1: Free Trial Auto-Provisioning with 336 Hours UTC and 1 Device Limit', () => {
+test('Free Trial 1: Free Trial Auto-Provisioning with 168 Hours UTC and 1 Device Limit', () => {
   const db = initTestDatabase();
   setDatabase(db);
 
@@ -18,14 +22,15 @@ test('Free Trial 1: Free Trial Auto-Provisioning with 336 Hours UTC and 1 Device
   assert.strictEqual(sub.isTrial, true);
   assert.strictEqual(sub.trialExpired, false);
   assert.strictEqual(sub.status, 'trial');
+  assert.strictEqual(sub.planId, FREE_TRIAL_PLAN_ID);
   assert.strictEqual(sub.deviceLimit, 1);
-  assert.strictEqual(sub.daysRemaining, 14);
-  assert.strictEqual(sub.hoursRemaining, 336);
+  assert.strictEqual(sub.daysRemaining, 7);
+  assert.strictEqual(sub.hoursRemaining, FREE_TRIAL_DURATION_HOURS);
 
   const start = new Date(sub.startsAt).getTime();
   const end = new Date(sub.endsAt).getTime();
   const diffHours = Math.round((end - start) / (1000 * 60 * 60));
-  assert.strictEqual(diffHours, 336, 'Trial duration must be strictly 336 hours in UTC');
+  assert.strictEqual(diffHours, FREE_TRIAL_DURATION_HOURS, 'Trial duration must be strictly 168 hours in UTC');
 });
 
 test('Free Trial 2: Trial Is Organization-Scoped, Does Not Reset on Multiple Calls or Member Joins', () => {
@@ -80,7 +85,7 @@ test('Free Trial 3: Strict 1-Phone Device Limit Enforcement During Trial', () =>
   assert.strictEqual(check.maxLimit, 1);
 });
 
-test('Free Trial 4: Transition to trial_expired When 336 Hours Elapsed & Blocking New Devices', () => {
+test('Free Trial 4: Transition to trial_expired When 168 Hours Elapsed & Blocking New Devices', () => {
   const db = initTestDatabase();
   setDatabase(db);
 
@@ -88,13 +93,13 @@ test('Free Trial 4: Transition to trial_expired When 336 Hours Elapsed & Blockin
   db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Expired Org', 'مؤسسة منتهية', 'expired-org')`).run(orgId);
 
   // Set ends_at in the past (1 hour ago)
-  const fifteenDaysAgo = new Date(Date.now() - 337 * 60 * 60 * 1000).toISOString();
+  const eightDaysAgo = new Date(Date.now() - 169 * 60 * 60 * 1000).toISOString();
   const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
 
   db.prepare(`
     INSERT INTO organization_subscriptions (id, organization_id, plan_id, status, starts_at, ends_at, device_limit, features_json)
-    VALUES ('sub_expired', ?, 'plan_trial_14d', 'trial', ?, ?, 1, '[]')
-  `).run(orgId, fifteenDaysAgo, oneHourAgo);
+    VALUES ('sub_expired', ?, ?, 'trial', ?, ?, 1, '[]')
+  `).run(orgId, FREE_TRIAL_PLAN_ID, eightDaysAgo, oneHourAgo);
 
   const sub = SubscriptionService.getOrganizationSubscription(orgId);
   assert.strictEqual(sub.status, 'trial_expired');
@@ -132,6 +137,18 @@ test('Free Trial 5: 48h and 24h Warning State Transitions Without Duplication', 
   let row = db.prepare('SELECT trial_warn_48h_sent, trial_warn_24h_sent FROM organization_subscriptions WHERE id = ?').get('sub_warn_test') as any;
   assert.strictEqual(row.trial_warn_48h_sent, 1);
   assert.strictEqual(row.trial_warn_24h_sent, 0);
+  assert.strictEqual(
+    (db.prepare("SELECT COUNT(*) as count FROM outbox_jobs WHERE job_type = 'send_telegram'").get() as any).count,
+    1,
+    '48-hour warning must be queued for durable delivery'
+  );
+
+  // Re-reading in the same warning window must not enqueue a duplicate job.
+  SubscriptionService.getOrganizationSubscription(orgId);
+  assert.strictEqual(
+    (db.prepare("SELECT COUNT(*) as count FROM outbox_jobs WHERE job_type = 'send_telegram'").get() as any).count,
+    1
+  );
 
   // Move time to 12 hours from now (in 24h window)
   const endsAt12h = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
@@ -143,6 +160,11 @@ test('Free Trial 5: 48h and 24h Warning State Transitions Without Duplication', 
   row = db.prepare('SELECT trial_warn_48h_sent, trial_warn_24h_sent FROM organization_subscriptions WHERE id = ?').get('sub_warn_test') as any;
   assert.strictEqual(row.trial_warn_48h_sent, 1);
   assert.strictEqual(row.trial_warn_24h_sent, 1);
+  assert.strictEqual(
+    (db.prepare("SELECT COUNT(*) as count FROM outbox_jobs WHERE job_type = 'send_telegram'").get() as any).count,
+    2,
+    '24-hour warning must be separately queued exactly once'
+  );
 });
 
 test('Free Trial 6: Upgrading from Expired Free Trial to Paid Plan Restores Capabilities and Increases Device Limit', () => {
@@ -182,8 +204,8 @@ test('Free Trial 6: Upgrading from Expired Free Trial to Paid Plan Restores Capa
 
   // Inbound transfer arrives on platform receiver
   db.prepare(`
-    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount, status, reconciliation_state, provenance_confidence, financial_event_at)
-    VALUES ('tx_sub_up_799', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-UPGRADE-799', 'instapay', 799.0, 'confirmed', 'consistent', 1.0, datetime('now'))
+    INSERT INTO transactions (id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider, amount_minor, status, reconciliation_state, provenance_confidence, signature, financial_event_at)
+    VALUES ('tx_sub_up_799', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-UPGRADE-799', 'instapay', 79900, 'confirmed', 'consistent', 1.0, 'valid_hmac_signature', datetime('now'))
   `).run();
 
   // Report payment

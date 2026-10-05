@@ -367,6 +367,7 @@ export const initialDevices: Device[] = [
 export const initialRails: ProviderRail[] = [
   {
     id: 'vodafone_cash',
+    provider: 'vodafone_cash',
     name: 'Vodafone Cash',
     sharePercentage: 62,
     volume: 29970.0,
@@ -379,6 +380,7 @@ export const initialRails: ProviderRail[] = [
   },
   {
     id: 'instapay',
+    provider: 'instapay',
     name: 'InstaPay (IPN)',
     sharePercentage: 24,
     volume: 11600.0,
@@ -391,6 +393,7 @@ export const initialRails: ProviderRail[] = [
   },
   {
     id: 'orange_cash',
+    provider: 'orange_cash',
     name: 'Orange Cash',
     sharePercentage: 10,
     volume: 4850.0,
@@ -403,6 +406,7 @@ export const initialRails: ProviderRail[] = [
   },
   {
     id: 'etisalat_cash',
+    provider: 'etisalat_cash',
     name: 'e& Cash (Etisalat)',
     sharePercentage: 4,
     volume: 1930.0,

@@ -6,8 +6,15 @@ services:
     region: frankfurt
     buildCommand: npm install && npm run build
     startCommand: npm start
+    healthCheckPath: /ready
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
+      # Set a durable, explicitly managed path in Render before deployment. The current
+      # SQLite implementation is a temporary bridge; it is not a multi-instance database.
+      - key: DATABASE_FILE
+        sync: false
+      - key: APP_URL
+        sync: false

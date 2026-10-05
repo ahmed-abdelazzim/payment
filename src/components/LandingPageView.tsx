@@ -34,8 +34,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
     {
       q: language === 'ar' ? 'هل التجربة مجانية فعلًا؟' : 'Is the trial truly free?',
       a: language === 'ar'
-        ? 'نعم، تقدر تجرب النظام 14 يوم مع ربط هاتف واحد، بدون كريديت كارد وبدون أي دفع مسبق.'
-        : 'Yes, you can test the system for 14 full days connecting 1 terminal, with zero credit card and no upfront payment.',
+        ? 'نعم، تقدر تجرب النظام 7 أيام مع ربط هاتف واحد، بدون كريديت كارد وبدون أي دفع مسبق.'
+        : 'Yes, you can test the system for 7 full days connecting 1 terminal, with zero credit card and no upfront payment.',
     },
     {
       q: language === 'ar' ? 'ماذا يحدث بعد انتهاء التجربة؟' : 'What happens after the trial ends?',
@@ -169,7 +169,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                   onClick={() => onNavigate('/signup')}
                   className="px-4 py-2 rounded-xl bg-primary text-on-primary font-bold text-label-md hover:bg-primary/90 transition-all flex items-center gap-1 cursor-pointer shadow-xs active:scale-95"
                 >
-                  <span>{language === 'ar' ? 'جرّب مجانًا 14 يوم' : 'Try Free 14 Days'}</span>
+                  <span>{language === 'ar' ? 'جرّب مجانًا 7 أيام' : 'Try Free 7 Days'}</span>
                   <span className="material-symbols-outlined text-base">arrow_forward</span>
                 </button>
               </div>
@@ -221,8 +221,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
           {/* Trust Note */}
           <p className="text-label-md font-semibold text-on-surface-variant/90">
             {language === 'ar'
-              ? '14 يومًا مجانًا • ربط هاتف واحد • بدون كريديت كارد أو دفع مسبق'
-              : '14 Days Free • 1 Terminal Connection • No Credit Card Required'}
+              ? '7 أيام مجانًا • ربط هاتف واحد • بدون كريديت كارد أو دفع مسبق'
+              : '7 Days Free • 1 Terminal Connection • No Credit Card Required'}
           </p>
         </div>
 
@@ -566,8 +566,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
               </h3>
               <p className="text-body-sm text-on-surface-variant leading-relaxed">
                 {language === 'ar'
-                  ? 'ابدأ تجربة مجانية لمدة 14 يوم بدون كريديت كارد وبدون دفع مسبق.'
-                  : 'Start your 14-day free trial immediately without a credit card or upfront payment.'}
+                  ? 'ابدأ تجربة مجانية لمدة 7 أيام بدون كريديت كارد وبدون دفع مسبق.'
+                  : 'Start your 7-day free trial immediately without a credit card or upfront payment.'}
               </p>
             </div>
 
@@ -651,8 +651,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             </h2>
             <p className="text-body-md text-on-surface-variant">
               {language === 'ar'
-                ? 'ابدأ بتجربة مجانية لمدة 14 يوم، ولما تتأكد إن صرّاف مناسب لك، اختار عدد هواتف العمل والمدة المناسبة.'
-                : 'Start with 14 days free trial. Once verified, choose the capture capacity and billing cycle that fits your operations.'}
+                ? 'ابدأ بتجربة مجانية لمدة 7 أيام، ولما تتأكد إن صرّاف مناسب لك، اختار عدد هواتف العمل والمدة المناسبة.'
+                : 'Start with 7 days free trial. Once verified, choose the capture capacity and billing cycle that fits your operations.'}
             </p>
           </div>
 
@@ -876,8 +876,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
 
           <p className="text-body-md text-on-surface-variant max-w-2xl mx-auto mb-8 leading-relaxed font-normal">
             {language === 'ar'
-              ? 'ابدأ بهاتف واحد لمدة 14 يوم، وشوف بنفسك إزاي تنظيم التحويلات والمتابعة من مكان واحد يساعدك في يومك.'
-              : 'Begin with 1 capture phone for 14 full days, and witness how unifying your payments in one place clarifies your daily business.'}
+              ? 'ابدأ بهاتف واحد لمدة 7 أيام، وشوف بنفسك إزاي تنظيم التحويلات والمتابعة من مكان واحد يساعدك في يومك.'
+              : 'Begin with 1 capture phone for 7 full days, and witness how unifying your payments in one place clarifies your daily business.'}
           </p>
 
           <button
@@ -890,8 +890,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
 
           <p className="text-label-sm font-semibold text-on-surface-variant/80">
             {language === 'ar'
-              ? '14 يومًا مجانًا • ربط هاتف واحد • لا حاجة لأي كريديت كارد أو دفع مسبق'
-              : '14 Days Free • 1 Terminal • No Credit Card Required'}
+              ? '7 أيام مجانًا • ربط هاتف واحد • لا حاجة لأي كريديت كارد أو دفع مسبق'
+              : '7 Days Free • 1 Terminal • No Credit Card Required'}
           </p>
         </div>
       </section>
