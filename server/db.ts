@@ -9,16 +9,30 @@ export function setDatabase(db: DatabaseSync | null): void {
   dbInstance = db;
 }
 
+/**
+ * Resolves the configured durable database file. An explicit DATABASE_FILE wins; otherwise a
+ * Railway volume (RAILWAY_VOLUME_MOUNT_PATH) is used. Returns undefined when neither is set so
+ * production can refuse to write into the ephemeral container filesystem.
+ */
+export function resolveConfiguredDatabaseFile(): string | undefined {
+  const explicit = process.env.DATABASE_FILE?.trim();
+  if (explicit) return explicit;
+  const volume = process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim();
+  if (volume) return path.join(volume, 'sarraf_ops.db');
+  return undefined;
+}
+
 export function getDatabase(dbPath?: string): DatabaseSync {
   if (dbInstance) {
     return dbInstance;
   }
 
-  if (process.env.NODE_ENV === 'production' && !dbPath && !process.env.DATABASE_FILE?.trim()) {
+  const configured = resolveConfiguredDatabaseFile();
+  if (process.env.NODE_ENV === 'production' && !dbPath && !configured) {
     throw new Error('PRODUCTION_DATABASE_FILE_REQUIRED');
   }
 
-  const finalPath = dbPath || process.env.DATABASE_FILE || path.join(process.cwd(), 'data', 'sarraf_ops.db');
+  const finalPath = dbPath || configured || path.join(process.cwd(), 'data', 'sarraf_ops.db');
   if (process.env.NODE_ENV === 'production' && finalPath === ':memory:') {
     throw new Error('PRODUCTION_MEMORY_DATABASE_FORBIDDEN');
   }

@@ -1,4 +1,5 @@
 import { getOutboxRuntimeConfig } from './outboxWorker';
+import { resolveConfiguredDatabaseFile } from '../db';
 
 export interface RuntimeConfigurationIssue {
   code: string;
@@ -17,7 +18,7 @@ export interface RuntimeConfigurationAssessment {
 export function assessRuntimeConfiguration(): RuntimeConfigurationAssessment {
   const isProduction = process.env.NODE_ENV === 'production';
   const issues: RuntimeConfigurationIssue[] = [];
-  const databaseFile = process.env.DATABASE_FILE?.trim();
+  const databaseFile = resolveConfiguredDatabaseFile();
   const outbox = getOutboxRuntimeConfig();
 
   if (isProduction && !databaseFile) {
