@@ -191,7 +191,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {onlineDevicesCount}
               </span>
               <span className="text-title-sm text-on-surface-variant">/ {devices.length}</span>
-              <span className="text-label-xs text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 ml-2">
+              <span className="text-label-xs text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 ms-2">
                 {devices.length > 0
                   ? Math.round((onlineDevicesCount / devices.length) * 100)
                   : 0}

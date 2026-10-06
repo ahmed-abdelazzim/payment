@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
+import { formatDate } from '../utils/formatters';
 
 interface AuditLogEntry {
   id: string;
@@ -45,21 +46,21 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
         const raw = await auditRes.json();
         if (Array.isArray(raw)) {
           setLogs(
-            raw.map((item: any) => ({
-              id: item.id || `log_${Math.random()}`,
+            raw.map((item: any, idx: number) => ({
+              id: item.id || `log_${idx}_${item.createdAt || Date.now()}`,
               time: item.createdAt
-                ? new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                : 'Just now',
-              actor: item.actorIdentity || 'System Engine',
+                ? formatDate(item.createdAt, language, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                : (language === 'ar' ? 'منذ قليل' : 'Just now'),
+              actor: item.actorIdentity || (language === 'ar' ? 'نظام المحرك المركزي' : 'System Engine'),
               action: item.action || 'SECURITY_EVENT',
-              resource: `${item.resourceType || 'Record'}:${item.resourceId || 'N/A'}`,
+              resource: `${item.resourceType || (language === 'ar' ? 'سجل' : 'Record')}:${item.resourceId || 'N/A'}`,
               status:
                 item.action?.includes('REJECTED') || item.action?.includes('ERROR') || item.action?.includes('FAILED')
                   ? 'error'
                   : item.action?.includes('REVIEW') || item.action?.includes('PAUSED')
                   ? 'warning'
                   : 'success',
-              ip: item.originIp || 'Internal Gateway',
+              ip: item.originIp || (language === 'ar' ? 'بوابة داخلية' : 'Internal Gateway'),
               details: typeof item.details === 'object' ? JSON.stringify(item.details) : (item.details || item.action),
             }))
           );

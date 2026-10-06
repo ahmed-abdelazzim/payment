@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Workspace, User, TeamMember, CurrentSubscription } from '../types';
 import { apiFetch } from '../api';
 import { RoleBadge } from './RoleBadge';
+import { formatDate } from '../utils/formatters';
 
 interface SettingsViewProps {
   workspace: Workspace;
@@ -570,7 +571,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <RoleBadge role={m.role} language={language} />
                       </td>
                       <td className="py-3.5 px-4 text-on-surface-variant text-label-sm font-code-num">
-                        {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : 'Active'}
+                        {m.joinedAt ? formatDate(m.joinedAt, language) : (language === 'ar' ? 'نشط' : 'Active')}
                       </td>
                     </tr>
                   ))
@@ -597,7 +598,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </span>
                       </div>
                       <p className="text-label-xs text-on-surface-variant mt-0.5">
-                        {language === 'ar' ? 'تنتهي الصلاحية في:' : 'Expires:'} {new Date(inv.expiresAt).toLocaleDateString()}
+                        {language === 'ar' ? 'تنتهي الصلاحية في:' : 'Expires:'} {formatDate(inv.expiresAt, language)}
                       </p>
                     </div>
                     <span className="self-start sm:self-auto text-label-xs text-on-surface-variant">

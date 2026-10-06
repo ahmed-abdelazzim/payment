@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Transaction, Device, ProviderRail, Workspace, User, CurrentSubscription } from './types';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+import { Transaction, Device, ProviderRail, User, Workspace } from './types';
+import { useAuth } from './hooks/useAuth';
+import { useTelemetry } from './hooks/useTelemetry';
+import { safeStorage } from './utils/storage';
+import { formatDate } from './utils/formatters';
+
 import { Header } from './components/Header';
 import { DashboardView } from './components/DashboardView';
 import { LedgerView } from './components/LedgerView';
 import { DevicesView } from './components/DevicesView';
 import { RailsView } from './components/RailsView';
-import { AuditLogsView } from './components/AuditLogsView';
-import { SettingsView } from './components/SettingsView';
 import { NavigationDrawer } from './components/NavigationDrawer';
 import { BottomNavBar } from './components/BottomNavBar';
 import { ReviewModal } from './components/ReviewModal';
@@ -19,31 +22,49 @@ import { OnboardingGuideModal } from './components/OnboardingGuideModal';
 import { PairingModal } from './components/PairingModal';
 import { AddSourceModal } from './components/AddSourceModal';
 import { AuthView } from './components/AuthView';
-import { SubscriptionsView } from './components/SubscriptionsView';
-import { PlatformDashboardView } from './components/PlatformDashboardView';
-import { LandingPageView } from './components/LandingPageView';
-import { VerifyEmailView } from './components/VerifyEmailView';
-import { InviteAcceptView } from './components/InviteAcceptView';
+import { ViewLoadingSkeleton } from './components/ViewLoadingSkeleton';
 import { apiFetch } from './api';
 
+// Code-split heavy or secondary views to reduce the initial JS bundle size
+const LandingPageView = React.lazy(() =>
+  import('./components/LandingPageView').then((m) => ({ default: m.LandingPageView }))
+);
+const PlatformDashboardView = React.lazy(() =>
+  import('./components/PlatformDashboardView').then((m) => ({ default: m.PlatformDashboardView }))
+);
+const SettingsView = React.lazy(() =>
+  import('./components/SettingsView').then((m) => ({ default: m.SettingsView }))
+);
+const SubscriptionsView = React.lazy(() =>
+  import('./components/SubscriptionsView').then((m) => ({ default: m.SubscriptionsView }))
+);
+const AuditLogsView = React.lazy(() =>
+  import('./components/AuditLogsView').then((m) => ({ default: m.AuditLogsView }))
+);
+const VerifyEmailView = React.lazy(() =>
+  import('./components/VerifyEmailView').then((m) => ({ default: m.VerifyEmailView }))
+);
+const InviteAcceptView = React.lazy(() =>
+  import('./components/InviteAcceptView').then((m) => ({ default: m.InviteAcceptView }))
+);
+
 export default function App() {
-  // Public Routing & Path State
+  // Public Routing State
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname || '/');
 
-  // Authentication & Session State
-  const [hasSession, setHasSession] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [userWorkspaces, setUserWorkspaces] = useState<any[]>([]);
-  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
-  const [currentSub, setCurrentSub] = useState<CurrentSubscription | null>(null);
-  const workspaceIdRef = useRef<string | undefined>(undefined);
-  workspaceIdRef.current = workspace?.id;
-
-  // Core Data State (Loaded dynamically per tenant)
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [rails, setRails] = useState<ProviderRail[]>([]);
+  // Authentication State
+  const {
+    hasSession,
+    setHasSession,
+    currentUser,
+    setCurrentUser,
+    workspace,
+    setWorkspace,
+    userWorkspaces,
+    isAuthLoading,
+    handleLogout: authLogout,
+    handleSwitchWorkspace: authSwitchWorkspace,
+  } = useAuth();
 
   // Navigation & Language
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
@@ -59,17 +80,26 @@ export default function App() {
 
   // Toast notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Night Mode / Theme State
+  const showToast = useCallback((msg: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMessage(msg);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 3500);
+  }, []);
+
+  // Theme State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('sarraf_theme');
+    const saved = safeStorage.getItem('sarraf_theme');
     if (saved === 'dark' || saved === 'light') return saved;
     return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
       ? 'dark'
       : 'light';
   });
 
-  // Synchronize document dark class on theme change
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -81,14 +111,14 @@ export default function App() {
       root.classList.add('light');
       root.setAttribute('data-theme', 'light');
     }
-    localStorage.setItem('sarraf_theme', theme);
+    safeStorage.setItem('sarraf_theme', theme);
   }, [theme]);
 
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  // Synchronize document dir attribute on language change
+  // Synchronize document dir and lang attributes
   useEffect(() => {
     const html = document.documentElement;
     html.setAttribute('dir', language === 'ar' ? 'rtl' : 'ltr');
@@ -109,198 +139,38 @@ export default function App() {
     setCurrentPath(path.split('?')[0]);
   }, []);
 
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showToast = (msg: string) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToastMessage(msg);
-    toastTimerRef.current = setTimeout(() => {
-      setToastMessage(null);
-      toastTimerRef.current = null;
-    }, 3500);
-  };
-
-  // The quick-start guide may auto-open ONCE per workspace; once the user closes it we never force it again.
-  const onboardingKey = (orgId?: string) => `sarraf_onboarding_dismissed_${orgId || 'default'}`;
+  // Onboarding modal auto-show logic (at most once per tenant unless opened manually)
   const onboardingAutoShownRef = useRef<Set<string>>(new Set());
-  const dismissOnboarding = () => {
+  const onboardingKey = (orgId?: string) => `sarraf_onboarding_dismissed_${orgId || 'default'}`;
+
+  const dismissOnboarding = useCallback(() => {
     setIsOnboardingOpen(false);
-    try {
-      localStorage.setItem(onboardingKey(workspaceIdRef.current), '1');
-    } catch {}
-  };
+    safeStorage.setItem(onboardingKey(workspace?.id), '1');
+  }, [workspace?.id]);
 
-  // Fetch current user session and tenant context
-  const verifySession = useCallback(async () => {
-    setIsAuthLoading(true);
-    try {
-      const res = await apiFetch('/api/v1/auth/me');
-
-      if (res.ok) {
-        const data = await res.json();
-        setHasSession(true);
-        setCurrentUser(data.user);
-        setWorkspace({
-          id: data.organization.id,
-          name: data.organization.name,
-          nameAr: data.organization.name_ar || data.organization.name,
-          subTitle: `${data.organization.name_ar || data.organization.name} - بوابة العمليات`,
-          initials: data.organization.name.slice(0, 2).toUpperCase(),
-          slug: data.organization.slug,
-          defaultTimezone: data.organization.default_timezone,
-        });
-        if (Array.isArray(data.workspaces)) {
-          setUserWorkspaces(data.workspaces);
-        }
-      } else {
-        setHasSession(false);
-        setCurrentUser(null);
-        setWorkspace(null);
-        setCurrentSub(null);
-      }
-    } catch {
-      // Server unreachable
-    } finally {
-      setIsAuthLoading(false);
-    }
-  }, []);
-
-  // Fetch real data from backend API for the active authenticated tenant
-  const refreshBackendData = useCallback(async () => {
-    try {
-      const [txRes, devRes, railRes, subRes] = await Promise.all([
-        apiFetch('/api/v1/transactions'),
-        apiFetch('/api/v1/devices'),
-        apiFetch('/api/v1/sources'),
-        apiFetch('/api/v1/subscriptions/current'),
-      ]);
-
-      if (subRes.ok) {
-        const subData = await subRes.json();
-        setCurrentSub(subData);
-      }
-
-      if (txRes.ok && devRes.ok && railRes.ok) {
-        const txData = await txRes.json();
-        const devData = await devRes.json();
-        const railData = await railRes.json();
-
-        setTransactions(
-          Array.isArray(txData)
-            ? txData.map((t: any) => ({
-                id: t.id,
-                trxId: t.trxId || t.external_trx_id || t.id,
-                amount: t.amount,
-                currency: t.currency || 'EGP',
-                provider: t.provider,
-                providerLabel:
-                  t.provider === 'vodafone_cash'
-                    ? 'Vodafone Cash'
-                    : t.provider === 'instapay'
-                    ? 'InstaPay (IPN)'
-                    : t.provider === 'orange_cash'
-                    ? 'Orange Cash'
-                    : 'e& Cash',
-                senderName: t.senderName || 'Anonymous Customer',
-                senderPhone: t.senderPhone || '',
-                timeAgo: 'Recently',
-                timestamp: t.timestamp || new Date().toISOString(),
-                status: t.status,
-                confidenceScore: t.confidenceScore ? Math.round(t.confidenceScore * 100) : 95,
-                deviceId: t.deviceId || 'DEV-POS',
-                deviceName: t.deviceName || 'Terminal Gate',
-                reviewReason: t.reviewReason,
-                rawMessage: t.rawMessage,
-                signature: t.signature,
-              }))
-            : []
-        );
-
-        setDevices(
-          Array.isArray(devData)
-            ? devData.map((d: any) => ({
-                id: d.id,
-                deviceNumber: d.device_number,
-                name: d.friendly_name,
-                location: d.location || 'Terminal',
-                provider: 'vodafone_cash',
-                providerLabel: 'Vodafone Cash',
-                phoneNumber: '01019283921',
-                status: d.status,
-                batteryLevel: d.battery_level,
-                lastPing: d.last_seen_at || 'Just now',
-                txnsToday: d.txns_count || 0,
-                volumeToday: 0,
-                agentVersion: d.agent_version || 'v3.4.1-eg',
-                configVersion: d.config_version || 'cfg-v1.4',
-                verifiedAt: d.verified_at,
-                notificationListenerGranted: Boolean(d.notification_listener_granted),
-                batteryOptimizationExempt: Boolean(d.battery_optimization_exempt),
-              }))
-            : []
-        );
-
-        setRails(
-          Array.isArray(railData)
-            ? railData.map((r: any) => ({
-                id: r.id,
-                provider: r.provider,
-                name: r.name || r.provider,
-                sharePercentage: r.sharePercentage || 0,
-                volume: r.volume || 0,
-                target: r.dailyLimit || 60000,
-                txnsCount: r.txnsCount || 0,
-                color: r.color || '#1e3a8a',
-                walletNumber: r.walletNumber || r.primaryAddress || '',
-                dailyLimit: r.dailyLimit || 60000,
-                monthlyLimit: r.monthlyLimit || 200000,
-                dailyIntake: r.dailyIntake,
-                monthlyIntake: r.monthlyIntake,
-                dailyPercentage: r.dailyPercentage,
-                monthlyPercentage: r.monthlyPercentage,
-                isPaused: r.isPaused || false,
-              }))
-            : []
-        );
-
-        // Suggest the onboarding guide for an empty workspace, but only once and never after dismissal
-        if (Array.isArray(devData) && devData.length === 0) {
-          const orgId = workspaceIdRef.current || 'default';
-          let dismissed = false;
-          try {
-            dismissed = localStorage.getItem(onboardingKey(orgId)) === '1';
-          } catch {}
-          if (!dismissed && !onboardingAutoShownRef.current.has(orgId)) {
-            onboardingAutoShownRef.current.add(orgId);
-            setIsOnboardingOpen(true);
-          }
+  // Telemetry Polling Hook
+  const {
+    transactions,
+    setTransactions,
+    devices,
+    setDevices,
+    rails,
+    setRails,
+    currentSub,
+    refreshBackendData,
+    clearTelemetry,
+  } = useTelemetry({
+    enabled: Boolean(hasSession && currentUser && workspace),
+    onDeviceListFetched: (fetchedDevices) => {
+      if (fetchedDevices.length === 0 && workspace?.id) {
+        const dismissed = safeStorage.getItem(onboardingKey(workspace.id)) === '1';
+        if (!dismissed && !onboardingAutoShownRef.current.has(workspace.id)) {
+          onboardingAutoShownRef.current.add(workspace.id);
+          setIsOnboardingOpen(true);
         }
       }
-    } catch {
-      // offline
-    }
-  }, []);
-
-  // Initial Auth Check
-  useEffect(() => {
-    verifySession();
-  }, [verifySession]);
-
-  // Load tenant data whenever workspace is established
-  useEffect(() => {
-    if (currentUser && workspace) {
-      refreshBackendData();
-    }
-  }, [currentUser, workspace, refreshBackendData]);
-
-  // Live Real-Time Telemetry Auto-Sync: Poll every 3 seconds while in active workspace
-  useEffect(() => {
-    if (!hasSession || !currentUser || !workspace) return;
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'hidden') return;
-      refreshBackendData();
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [hasSession, currentUser, workspace, refreshBackendData]);
+    },
+  });
 
   const handleToggleLanguage = () => {
     setLanguage((prev) => (prev === 'en' ? 'ar' : 'en'));
@@ -320,16 +190,8 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    try {
-      await apiFetch('/api/v1/auth/logout', { method: 'POST' });
-    } catch {}
-    setHasSession(false);
-    setCurrentUser(null);
-    setWorkspace(null);
-    setCurrentSub(null);
-    setTransactions([]);
-    setDevices([]);
-    setRails([]);
+    await authLogout();
+    clearTelemetry();
     setIsDrawerOpen(false);
     navigate('/');
     showToast(language === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Logged out successfully');
@@ -344,13 +206,11 @@ export default function App() {
     return serverMessage || (language === 'ar' ? fallbackAr : fallbackEn);
   };
 
-  // Approve review transaction via real backend API (no optimistic fallback: the ledger is the source of truth)
+  // Financial Ledger Review Actions
   const handleApproveTransaction = async (tx: Transaction) => {
     let res: Response | null = null;
     try {
-      res = await apiFetch(`/api/v1/transactions/${tx.id}/approve`, {
-        method: 'POST',
-      });
+      res = await apiFetch(`/api/v1/transactions/${tx.id}/approve`, { method: 'POST' });
     } catch {}
     if (res?.ok) {
       await refreshBackendData();
@@ -363,17 +223,18 @@ export default function App() {
       return;
     }
     showToast(
-      await actionErrorMessage(res, 'تعذر اعتماد العملية. لم يتم تغيير أي شيء، حاول مرة أخرى.', 'Could not approve the transaction. Nothing was changed, please retry.')
+      await actionErrorMessage(
+        res,
+        'تعذر اعتماد العملية. لم يتم تغيير أي شيء، حاول مرة أخرى.',
+        'Could not approve the transaction. Nothing was changed, please retry.'
+      )
     );
   };
 
-  // Reject review transaction via real backend API
   const handleRejectTransaction = async (tx: Transaction) => {
     let res: Response | null = null;
     try {
-      res = await apiFetch(`/api/v1/transactions/${tx.id}/reject`, {
-        method: 'POST',
-      });
+      res = await apiFetch(`/api/v1/transactions/${tx.id}/reject`, { method: 'POST' });
     } catch {}
     if (res?.ok) {
       await refreshBackendData();
@@ -386,32 +247,35 @@ export default function App() {
       return;
     }
     showToast(
-      await actionErrorMessage(res, 'تعذر رفض العملية. لم يتم تغيير أي شيء، حاول مرة أخرى.', 'Could not reject the transaction. Nothing was changed, please retry.')
+      await actionErrorMessage(
+        res,
+        'تعذر رفض العملية. لم يتم تغيير أي شيء، حاول مرة أخرى.',
+        'Could not reject the transaction. Nothing was changed, please retry.'
+      )
     );
   };
 
-  // Toggle device status (online / offline) via real backend; never fake the state locally
   const handleToggleDeviceStatus = async (deviceId: string) => {
     let res: Response | null = null;
     try {
-      res = await apiFetch(`/api/v1/devices/${deviceId}/toggle`, {
-        method: 'POST',
-      });
+      res = await apiFetch(`/api/v1/devices/${deviceId}/toggle`, { method: 'POST' });
     } catch {}
     if (res?.ok) {
       await refreshBackendData();
       return;
     }
     showToast(
-      await actionErrorMessage(res, 'تعذر تغيير حالة الجهاز. حاول مرة أخرى.', 'Could not change the device status. Please retry.')
+      await actionErrorMessage(
+        res,
+        'تعذر تغيير حالة الجهاز. حاول مرة أخرى.',
+        'Could not change the device status. Please retry.'
+      )
     );
   };
 
   const handleToggleRailPause = async (sourceId: string) => {
     try {
-      const res = await apiFetch(`/api/v1/sources/${sourceId}/toggle-pause`, {
-        method: 'POST',
-      });
+      const res = await apiFetch(`/api/v1/sources/${sourceId}/toggle-pause`, { method: 'POST' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.message || 'Unable to update source status');
@@ -420,41 +284,24 @@ export default function App() {
     } catch (err: any) {
       showToast(
         language === 'ar'
-          ? (err.message || 'تعذر تحديث حالة مصدر الاستقبال.')
-          : (err.message || 'Unable to update the receiving source.')
+          ? err.message || 'تعذر تحديث حالة مصدر الاستقبال.'
+          : err.message || 'Unable to update the receiving source.'
       );
     }
   };
 
-  // Switch workspace
   const handleSwitchWorkspace = async () => {
     if (userWorkspaces.length > 1) {
       const nextOrg = userWorkspaces.find((w) => w.id !== workspace?.id) || userWorkspaces[0];
-      try {
-        const res = await apiFetch('/api/v1/auth/switch-workspace', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ organizationId: nextOrg.id }),
-        });
-        if (res.ok) {
-          setWorkspace({
-            id: nextOrg.id,
-            name: nextOrg.name,
-            nameAr: nextOrg.name_ar || nextOrg.name,
-            subTitle: `${nextOrg.name_ar || nextOrg.name} - بوابة العمليات`,
-            initials: nextOrg.name.slice(0, 2).toUpperCase(),
-            slug: nextOrg.slug,
-          });
-          refreshBackendData();
-          showToast(
-            language === 'ar'
-              ? `تم التبديل إلى: ${nextOrg.name_ar || nextOrg.name}`
-              : `Switched to workspace: ${nextOrg.name}`
-          );
-        }
-      } catch {}
+      const updated = await authSwitchWorkspace(nextOrg.id);
+      if (updated) {
+        refreshBackendData();
+        showToast(
+          language === 'ar'
+            ? `تم التبديل إلى: ${updated.nameAr || updated.name}`
+            : `Switched to workspace: ${updated.name}`
+        );
+      }
     } else {
       showToast(
         language === 'ar'
@@ -464,7 +311,7 @@ export default function App() {
     }
   };
 
-  // 1. Loading State
+  // 1. Initial Authentication Loading State
   if (isAuthLoading) {
     return (
       <div className="min-h-screen bg-surface-container-lowest flex items-center justify-center">
@@ -483,26 +330,27 @@ export default function App() {
   // 2. Public Marketing Landing Page at '/'
   if (currentPath === '/') {
     return (
-      <LandingPageView
-        language={language}
-        onToggleLanguage={handleToggleLanguage}
-        onNavigate={navigate}
-        isLoggedIn={Boolean(hasSession && currentUser && workspace)}
-        theme={theme}
-        onToggleTheme={handleToggleTheme}
-      />
+      <Suspense fallback={<ViewLoadingSkeleton />}>
+        <LandingPageView
+          language={language}
+          onToggleLanguage={handleToggleLanguage}
+          onNavigate={navigate}
+          isLoggedIn={Boolean(hasSession && currentUser && workspace)}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+        />
+      </Suspense>
     );
   }
 
-  // 3. Public Login Page at '/login'
-  if (currentPath === '/login') {
+  // 3. Public Auth Pages (/login, /signup)
+  if (currentPath === '/login' || currentPath === '/signup') {
     if (hasSession && currentUser && workspace) {
-      // Already authenticated, redirect to /app
       navigate('/app');
     } else {
       return (
         <AuthView
-          initialTab="login"
+          initialTab={currentPath === '/signup' ? 'signup' : 'login'}
           onSuccess={handleAuthSuccess}
           language={language}
           onToggleLanguage={handleToggleLanguage}
@@ -514,56 +362,40 @@ export default function App() {
     }
   }
 
-  // 4. Public Signup Page at '/signup'
-  if (currentPath === '/signup') {
-    if (hasSession && currentUser && workspace) {
-      // Already authenticated, redirect to /app
-      navigate('/app');
-    } else {
-      return (
-        <AuthView
-          initialTab="signup"
-          onSuccess={handleAuthSuccess}
-          language={language}
-          onToggleLanguage={handleToggleLanguage}
-          onNavigateHome={() => navigate('/')}
-          theme={theme}
-          onToggleTheme={handleToggleTheme}
-        />
-      );
-    }
-  }
-
-  // 5. Public Email Verification at '/verify-email'
+  // 4. Public Email Verification
   if (currentPath === '/verify-email') {
     return (
-      <VerifyEmailView
-        language={language}
-        onNavigateHome={() => navigate('/')}
-        onNavigateLogin={() => navigate('/login')}
-        onNavigateApp={() => {
-          navigate('/app');
-          refreshBackendData();
-        }}
-      />
+      <Suspense fallback={<ViewLoadingSkeleton />}>
+        <VerifyEmailView
+          language={language}
+          onNavigateHome={() => navigate('/')}
+          onNavigateLogin={() => navigate('/login')}
+          onNavigateApp={() => {
+            navigate('/app');
+            refreshBackendData();
+          }}
+        />
+      </Suspense>
     );
   }
 
-  // 6. Public Team Member Invite Acceptance at '/invite/:token'
+  // 5. Public Team Member Invite Acceptance
   if (currentPath.startsWith('/invite/')) {
     const inviteToken = currentPath.replace('/invite/', '').split('/')[0];
     return (
-      <InviteAcceptView
-        token={inviteToken}
-        language={language}
-        onSuccess={handleAuthSuccess}
-        onNavigateHome={() => navigate('/')}
-        onNavigateLogin={() => navigate('/login')}
-      />
+      <Suspense fallback={<ViewLoadingSkeleton />}>
+        <InviteAcceptView
+          token={inviteToken}
+          language={language}
+          onSuccess={handleAuthSuccess}
+          onNavigateHome={() => navigate('/')}
+          onNavigateLogin={() => navigate('/login')}
+        />
+      </Suspense>
     );
   }
 
-  // 7. Protected Client Dashboard at '/app' (and any other authenticated view)
+  // 6. Protected Client Dashboard at '/app' (and any other authenticated view)
   if (!hasSession || !currentUser || !workspace) {
     return (
       <AuthView
@@ -600,10 +432,9 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
       />
 
-      {/* Trial Active Banner (Requirement 7) */}
+      {/* Trial Active Banner */}
       {currentSub?.status === 'trial' && (
         currentSub.hoursRemaining !== undefined && currentSub.hoursRemaining <= 48 ? (
-          // Urgent 48h / 24h Warning Banner
           <div className="bg-amber-500/10 border-b border-amber-500/30 text-on-surface px-4 py-2.5 text-label-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 max-w-7xl mx-auto w-full">
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-amber-600 text-lg shrink-0">timer</span>
@@ -611,7 +442,7 @@ export default function App() {
                 <span className="font-bold text-amber-800 dark:text-amber-200">
                   {language === 'ar' ? 'تجربتك المجانية قربت تخلص' : 'Your Free Trial is Ending Soon'}
                 </span>
-                <span className="text-on-surface-variant text-xs mr-2 rtl:mr-0 rtl:ml-2">
+                <span className="text-on-surface-variant text-xs ms-2">
                   {language === 'ar'
                     ? `(باقٍ ${currentSub.hoursRemaining} ساعة). نتمنى صرّاف يكون ساعدك تتابع تحويلاتك بشكل أوضح. اختار الباقة المناسبة قبل انتهاء التجربة عشان تستمر متابعة الرسائل الجديدة بدون توقف.`
                     : `(${currentSub.hoursRemaining} hours left). We hope Sarraf helped you monitor payments. Select a plan before expiration to continue uninterrupted.`}
@@ -626,7 +457,6 @@ export default function App() {
             </button>
           </div>
         ) : (
-          // Standard Active Trial Banner
           <div className="bg-primary/10 border-b border-primary/20 text-on-surface px-4 py-2 text-label-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 max-w-7xl mx-auto w-full">
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-primary text-base shrink-0">workspace_premium</span>
@@ -634,10 +464,10 @@ export default function App() {
                 <span className="font-bold text-primary">
                   {language === 'ar' ? 'أنت الآن في تجربتك المجانية' : 'You are in Your Free Trial'}
                 </span>
-                <span className="text-on-surface-variant text-xs mr-2 rtl:mr-0 rtl:ml-2">
+                <span className="text-on-surface-variant text-xs ms-2">
                   {language === 'ar'
-                    ? `باقي لك ${currentSub.daysRemaining} يوماً لتجربة صرّاف مع هاتف واحد (ينتهي في ${currentSub.endsAt ? new Date(currentSub.endsAt).toLocaleDateString('ar-EG') : '7 أيام'}). اختار باقتك في أي وقت عشان تكمل متابعة شغلك.`
-                    : `${currentSub.daysRemaining} days remaining for testing with 1 terminal (expires ${currentSub.endsAt ? new Date(currentSub.endsAt).toLocaleDateString('en-US') : 'in 7 days'}). Choose your plan anytime to keep tracking.`}
+                    ? `باقي لك ${currentSub.daysRemaining} يوماً لتجربة صرّاف مع هاتف واحد (ينتهي في ${formatDate(currentSub.endsAt, 'ar')}). اختار باقتك في أي وقت عشان تكمل متابعة شغلك.`
+                    : `${currentSub.daysRemaining} days remaining for testing with 1 terminal (expires ${formatDate(currentSub.endsAt, 'en')}). Choose your plan anytime to keep tracking.`}
                 </span>
               </div>
             </div>
@@ -651,7 +481,7 @@ export default function App() {
         )
       )}
 
-      {/* Trial Expired Banner / Notice (Requirement 8) */}
+      {/* Trial Expired Notice */}
       {currentSub?.status === 'trial_expired' && (
         <div className="bg-error/10 border-b border-error/20 text-on-surface px-4 py-3 text-label-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 max-w-7xl mx-auto w-full">
           <div className="flex items-start gap-2.5">
@@ -718,7 +548,7 @@ export default function App() {
                   : 'Could not send the verification link. Please try again shortly.'
               );
             }}
-            className="underline hover:text-primary/80 font-bold shrink-0"
+            className="underline hover:text-primary/80 font-bold shrink-0 cursor-pointer"
           >
             {language === 'ar' ? 'إعادة الإرسال' : 'Resend Link'}
           </button>
@@ -726,84 +556,86 @@ export default function App() {
       )}
 
       {/* Main View Router */}
-      {currentTab === 'dashboard' && (
-        <DashboardView
-          transactions={transactions}
-          devices={devices}
-          rails={rails}
-          onSelectTransaction={(tx) => {
-            setSelectedTransaction(tx);
-            setCurrentTab('ledger');
-          }}
-          onOpenReview={(tx) => setReviewingTransaction(tx)}
-          onInspectDevice={(_dev) => {
-            setCurrentTab('devices');
-          }}
-          onOpenLedger={() => setCurrentTab('ledger')}
-          language={language}
-        />
-      )}
+      <main className="flex-1">
+        {currentTab === 'dashboard' && (
+          <DashboardView
+            transactions={transactions}
+            devices={devices}
+            rails={rails}
+            onSelectTransaction={(tx) => {
+              setSelectedTransaction(tx);
+              setCurrentTab('ledger');
+            }}
+            onOpenReview={(tx) => setReviewingTransaction(tx)}
+            onInspectDevice={(_dev) => setCurrentTab('devices')}
+            onOpenLedger={() => setCurrentTab('ledger')}
+            language={language}
+          />
+        )}
 
-      {currentTab === 'ledger' && (
-        <LedgerView
-          transactions={transactions}
-          selectedTransaction={selectedTransaction}
-          onSelectTransaction={(tx) => setSelectedTransaction(tx)}
-          onOpenReview={(tx) => setReviewingTransaction(tx)}
-          onConfirmTransaction={(tx) => handleApproveTransaction(tx)}
-          language={language}
-        />
-      )}
+        {currentTab === 'ledger' && (
+          <LedgerView
+            transactions={transactions}
+            selectedTransaction={selectedTransaction}
+            onSelectTransaction={(tx) => setSelectedTransaction(tx)}
+            onOpenReview={(tx) => setReviewingTransaction(tx)}
+            onConfirmTransaction={(tx) => handleApproveTransaction(tx)}
+            language={language}
+          />
+        )}
 
-      {currentTab === 'devices' && (
-        <DevicesView
-          devices={devices}
-          onToggleDeviceStatus={handleToggleDeviceStatus}
-          onOpenPairDevice={() => setIsPairingOpen(true)}
-          language={language}
-        />
-      )}
+        {currentTab === 'devices' && (
+          <DevicesView
+            devices={devices}
+            onToggleDeviceStatus={handleToggleDeviceStatus}
+            onOpenPairDevice={() => setIsPairingOpen(true)}
+            language={language}
+          />
+        )}
 
-      {currentTab === 'rails' && (
-        <RailsView
-          rails={rails}
-          onUpdateRails={(updated) => setRails(updated)}
-          onTogglePause={handleToggleRailPause}
-          onOpenAddSource={() => setIsAddSourceOpen(true)}
-          language={language}
-        />
-      )}
+        {currentTab === 'rails' && (
+          <RailsView
+            rails={rails}
+            onUpdateRails={(updated) => setRails(updated)}
+            onTogglePause={handleToggleRailPause}
+            onOpenAddSource={() => setIsAddSourceOpen(true)}
+            language={language}
+          />
+        )}
 
-      {currentTab === 'audit' && <AuditLogsView language={language} />}
+        <Suspense fallback={<ViewLoadingSkeleton />}>
+          {currentTab === 'audit' && <AuditLogsView language={language} />}
 
-      {currentTab === 'settings' && (
-        <SettingsView
-          workspace={workspace}
-          currentUser={currentUser}
-          onUpdateWorkspace={(updated) => {
-            setWorkspace((prev) => (prev ? { ...prev, ...updated } : null));
-          }}
-          onNavigateToSubscriptions={() => setCurrentTab('subscriptions')}
-          language={language}
-          theme={theme}
-          onToggleTheme={handleToggleTheme}
-        />
-      )}
+          {currentTab === 'settings' && (
+            <SettingsView
+              workspace={workspace}
+              currentUser={currentUser}
+              onUpdateWorkspace={(updated) => {
+                setWorkspace((prev) => (prev ? { ...prev, ...updated } : null));
+              }}
+              onNavigateToSubscriptions={() => setCurrentTab('subscriptions')}
+              language={language}
+              theme={theme}
+              onToggleTheme={handleToggleTheme}
+            />
+          )}
 
-      {currentTab === 'subscriptions' && (
-        <SubscriptionsView
-          language={language}
-          onNavigateToTab={(tab) => setCurrentTab(tab)}
-          showToast={showToast}
-        />
-      )}
+          {currentTab === 'subscriptions' && (
+            <SubscriptionsView
+              language={language}
+              onNavigateToTab={(tab) => setCurrentTab(tab)}
+              showToast={showToast}
+            />
+          )}
 
-      {currentTab === 'platform' && currentUser.isPlatformAdmin && (
-        <PlatformDashboardView
-          language={language}
-          showToast={showToast}
-        />
-      )}
+          {currentTab === 'platform' && currentUser.isPlatformAdmin && (
+            <PlatformDashboardView
+              language={language}
+              showToast={showToast}
+            />
+          )}
+        </Suspense>
+      </main>
 
       {/* Navigation Slide-out Drawer */}
       <NavigationDrawer
@@ -823,7 +655,7 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
       />
 
-      {/* Bottom Navigation Bar (Mobile / Compact Viewport) */}
+      {/* Bottom Navigation Bar */}
       <BottomNavBar
         currentTab={currentTab}
         onSelectTab={(tab) => setCurrentTab(tab)}
