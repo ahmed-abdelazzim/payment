@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Workspace, User, TeamMember, CurrentSubscription } from '../types';
 import { apiFetch } from '../api';
+import { RoleBadge } from './RoleBadge';
 
 interface SettingsViewProps {
   workspace: Workspace;
@@ -486,8 +487,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <span className="text-label-sm text-on-surface-variant block">
                   {language === 'ar' ? 'الصلاحية والمسؤولية' : 'Role & Privilege'}
                 </span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-sm font-bold bg-primary text-on-primary uppercase mt-1">
-                  {currentUser.role}
+                <span className="mt-1 inline-block">
+                  <RoleBadge role={currentUser.role} language={language} />
                 </span>
               </div>
             </div>
@@ -551,9 +552,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <td colSpan={4} className="py-6 px-4 text-center text-on-surface-variant">
                       <div className="flex items-center justify-center gap-2">
                         <span className="font-bold text-on-surface">{currentUser.fullName}</span>
-                        <span className="text-xs px-2 py-0.5 rounded bg-primary text-on-primary">
-                          {currentUser.role}
-                        </span>
+                        <RoleBadge role={currentUser.role} language={language} />
                       </div>
                     </td>
                   </tr>
@@ -568,19 +567,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </td>
                       <td className="py-3.5 px-4 font-code-num text-on-surface-variant">{m.email}</td>
                       <td className="py-3.5 px-4">
-                        <span
-                          className={`inline-block px-2.5 py-0.5 rounded-full text-label-xs font-bold uppercase ${
-                            m.role === 'owner'
-                              ? 'bg-primary text-on-primary'
-                              : m.role === 'admin'
-                              ? 'bg-primary-container text-on-primary-container'
-                              : m.role === 'manager'
-                              ? 'bg-surface-container-high text-primary'
-                              : 'bg-surface-container text-on-surface-variant'
-                          }`}
-                        >
-                          {m.role}
-                        </span>
+                        <RoleBadge role={m.role} language={language} />
                       </td>
                       <td className="py-3.5 px-4 text-on-surface-variant text-label-sm font-code-num">
                         {m.joinedAt ? new Date(m.joinedAt).toLocaleDateString() : 'Active'}

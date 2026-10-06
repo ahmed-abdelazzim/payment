@@ -311,89 +311,75 @@ export default function App() {
     showToast(language === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Logged out successfully');
   };
 
-  // Approve review transaction via real backend API
+  const actionErrorMessage = async (res: Response | null, fallbackAr: string, fallbackEn: string) => {
+    let serverMessage = '';
+    if (res) {
+      const data = await res.json().catch(() => ({}));
+      serverMessage = data?.message || '';
+    }
+    return serverMessage || (language === 'ar' ? fallbackAr : fallbackEn);
+  };
+
+  // Approve review transaction via real backend API (no optimistic fallback: the ledger is the source of truth)
   const handleApproveTransaction = async (tx: Transaction) => {
+    let res: Response | null = null;
     try {
-      const res = await apiFetch(`/api/v1/transactions/${tx.id}/approve`, {
+      res = await apiFetch(`/api/v1/transactions/${tx.id}/approve`, {
         method: 'POST',
       });
-      if (res.ok) {
-        await refreshBackendData();
-        setReviewingTransaction(null);
-        showToast(
-          language === 'ar'
-            ? `تم اعتماد العملية ${tx.trxId} رسمياً وتحديث رصيد الدفتر`
-            : `Transaction ${tx.trxId} approved & recorded to audit log.`
-        );
-        return;
-      }
     } catch {}
-
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id ? { ...t, status: 'confirmed' } : t))
-    );
-    setReviewingTransaction(null);
+    if (res?.ok) {
+      await refreshBackendData();
+      setReviewingTransaction(null);
+      showToast(
+        language === 'ar'
+          ? `تم اعتماد العملية ${tx.trxId} رسمياً وتحديث رصيد الدفتر`
+          : `Transaction ${tx.trxId} approved & recorded to audit log.`
+      );
+      return;
+    }
     showToast(
-      language === 'ar'
-        ? `تم اعتماد العملية ${tx.trxId} بنجاح`
-        : `Transaction ${tx.trxId} confirmed and ledger updated.`
+      await actionErrorMessage(res, 'تعذر اعتماد العملية. لم يتم تغيير أي شيء، حاول مرة أخرى.', 'Could not approve the transaction. Nothing was changed, please retry.')
     );
   };
 
   // Reject review transaction via real backend API
   const handleRejectTransaction = async (tx: Transaction) => {
+    let res: Response | null = null;
     try {
-      const res = await apiFetch(`/api/v1/transactions/${tx.id}/reject`, {
+      res = await apiFetch(`/api/v1/transactions/${tx.id}/reject`, {
         method: 'POST',
       });
-      if (res.ok) {
-        await refreshBackendData();
-        setReviewingTransaction(null);
-        showToast(
-          language === 'ar'
-            ? `تم رفض العملية ${tx.trxId} كرسالة غير موثوقة وتوثيق ذلك في سجل الأمان`
-            : `Transaction ${tx.trxId} flagged as rejected & logged.`
-        );
-        return;
-      }
     } catch {}
-
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id ? { ...t, status: 'failed' } : t))
-    );
-    setReviewingTransaction(null);
+    if (res?.ok) {
+      await refreshBackendData();
+      setReviewingTransaction(null);
+      showToast(
+        language === 'ar'
+          ? `تم رفض العملية ${tx.trxId} كرسالة غير موثوقة وتوثيق ذلك في سجل الأمان`
+          : `Transaction ${tx.trxId} flagged as rejected & logged.`
+      );
+      return;
+    }
     showToast(
-      language === 'ar'
-        ? `تم رفض العملية ${tx.trxId} كرسالة غير موثوقة`
-        : `Transaction ${tx.trxId} rejected as unverified.`
+      await actionErrorMessage(res, 'تعذر رفض العملية. لم يتم تغيير أي شيء، حاول مرة أخرى.', 'Could not reject the transaction. Nothing was changed, please retry.')
     );
   };
 
-  // Toggle device status (online / offline) via real backend
+  // Toggle device status (online / offline) via real backend; never fake the state locally
   const handleToggleDeviceStatus = async (deviceId: string) => {
+    let res: Response | null = null;
     try {
-      const res = await apiFetch(`/api/v1/devices/${deviceId}/toggle`, {
+      res = await apiFetch(`/api/v1/devices/${deviceId}/toggle`, {
         method: 'POST',
       });
-      if (res.ok) {
-        await refreshBackendData();
-        return;
-      }
     } catch {}
-
-    setDevices((prev) =>
-      prev.map((d) => {
-        if (d.id === deviceId) {
-          const newStatus = d.status === 'online' ? 'offline' : 'online';
-          return {
-            ...d,
-            status: newStatus,
-            lastPing: newStatus === 'online' ? 'Just now' : '15 min ago',
-            offlineDuration: newStatus === 'offline' ? '15 min' : undefined,
-          };
-        }
-        return d;
-      })
+    if (res?.ok) {
+      await refreshBackendData();
+      return;
+    }
+    showToast(
+      await actionErrorMessage(res, 'تعذر تغيير حالة الجهاز. حاول مرة أخرى.', 'Could not change the device status. Please retry.')
     );
   };
 
@@ -699,8 +685,14 @@ export default function App() {
                       ? 'تم إرسال رابط تأكيد البريد الإلكتروني بنجاح.'
                       : 'Verification link sent to your inbox.'
                   );
+                  return;
                 }
               } catch {}
+              showToast(
+                language === 'ar'
+                  ? 'تعذر إرسال رابط التأكيد الآن. حاول مرة أخرى بعد قليل.'
+                  : 'Could not send the verification link. Please try again shortly.'
+              );
             }}
             className="underline hover:text-primary/80 font-bold shrink-0"
           >

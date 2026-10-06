@@ -23,6 +23,18 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
   const [setAsDefault, setSetAsDefault] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [walletTouched, setWalletTouched] = useState(false);
+
+  const toLatinDigits = (v: string) => v.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+  const normalizedWallet = toLatinDigits(walletNumber).replace(/[\s-]/g, '');
+  const isMobileWallet = /^01[0125]\d{8}$/.test(normalizedWallet);
+  const isInstapayHandle = /^[A-Za-z0-9._-]{3,64}@[A-Za-z]{2,32}$/.test(normalizedWallet);
+  const walletValid = provider === 'instapay' ? isMobileWallet || isInstapayHandle : isMobileWallet;
+  const walletError = walletTouched && walletNumber !== '' && !walletValid
+    ? provider === 'instapay'
+      ? language === 'ar' ? 'أدخل عنوان إنستاباي صحيح (name@bank) أو رقم موبايل من 11 رقماً.' : 'Enter a valid InstaPay address (name@bank) or an 11-digit mobile number.'
+      : language === 'ar' ? 'أدخل رقم موبايل مصري صحيح من 11 رقماً يبدأ بـ 010 أو 011 أو 012 أو 015.' : 'Enter a valid 11-digit Egyptian mobile number starting with 010, 011, 012 or 015.'
+    : null;
 
   // ESC key to close
   useEffect(() => {
@@ -44,6 +56,8 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setWalletTouched(true);
+    if (!walletValid) return;
     setLoading(true);
     setError(null);
 
@@ -56,7 +70,7 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
         body: JSON.stringify({
           provider,
           friendlyName,
-          walletNumber,
+          walletNumber: normalizedWallet,
           dailyLimit: Number(dailyLimit),
           monthlyLimit: Number(monthlyLimit),
           setAsDefault,
@@ -84,7 +98,7 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
         target: dailyLimit,
         txnsCount: 0,
         color: colorMap[provider],
-        walletNumber,
+        walletNumber: normalizedWallet,
         dailyLimit,
         monthlyLimit,
         isPaused: false,
@@ -165,13 +179,30 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
                 : 'Wallet Mobile Number (MSISDN)'}
             </label>
             <input
-              type="text"
+              type={provider === 'instapay' ? 'text' : 'tel'}
+              inputMode={provider === 'instapay' ? 'email' : 'numeric'}
+              autoComplete="off"
+              dir="ltr"
+              maxLength={provider === 'instapay' ? 70 : 14}
               required
               value={walletNumber}
-              onChange={(e) => setWalletNumber(e.target.value)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setWalletNumber(provider === 'instapay' ? raw : raw.replace(/[^0-9٠-٩\s-]/g, ''));
+              }}
+              onBlur={() => setWalletTouched(true)}
+              aria-invalid={Boolean(walletError)}
               placeholder={provider === 'instapay' ? 'merchant@instapay' : '01019283921'}
-              className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest font-code-num text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
+              className={`w-full px-3.5 py-2.5 rounded-lg border bg-surface-container-lowest font-code-num text-on-surface text-body-md focus:ring-2 focus:outline-none ${
+                walletError ? 'border-error focus:ring-error' : 'border-outline-variant focus:ring-primary'
+              }`}
             />
+            {walletError && (
+              <p className="mt-1 text-label-xs text-error flex items-center gap-1">
+                <span className="material-symbols-outlined text-sm">error</span>
+                <span>{walletError}</span>
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">

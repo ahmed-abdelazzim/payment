@@ -904,11 +904,25 @@ apiRouter.post('/sources', requireAuth, requireRole(['owner', 'admin']), (req: A
   }
 
   const normalizedFriendlyName = String(friendlyName).trim();
-  const normalizedAddress = String(walletNumber).trim();
+  const normalizedAddress = String(walletNumber)
+    .trim()
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[\s-]/g, '');
   const suppliedDailyLimit = dailyLimit !== undefined && dailyLimit !== null && dailyLimit !== '';
   const suppliedMonthlyLimit = monthlyLimit !== undefined && monthlyLimit !== null && monthlyLimit !== '';
   if (!normalizedFriendlyName || !normalizedAddress || normalizedFriendlyName.length > 150 || normalizedAddress.length > 150) {
     res.status(400).json({ error: 'INVALID_SOURCE_DETAILS', message: 'Source name and receiving address must be valid.' });
+    return;
+  }
+  const isEgyptMobile = /^01[0125]\d{8}$/.test(normalizedAddress);
+  const isInstapayHandle = /^[A-Za-z0-9._-]{3,64}@[A-Za-z]{2,32}$/.test(normalizedAddress);
+  if (normalizedProvider === 'instapay' ? !(isEgyptMobile || isInstapayHandle) : !isEgyptMobile) {
+    res.status(400).json({
+      error: 'INVALID_WALLET_ADDRESS',
+      message: normalizedProvider === 'instapay'
+        ? 'Enter a valid InstaPay address (name@bank) or an 11-digit Egyptian mobile number.'
+        : 'Enter a valid 11-digit Egyptian mobile number (e.g. 01012345678).',
+    });
     return;
   }
   if (normalizedProvider === 'instapay' && (!suppliedDailyLimit || !suppliedMonthlyLimit)) {

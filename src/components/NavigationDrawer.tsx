@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Workspace, User } from '../types';
+import { RoleBadge } from './RoleBadge';
 
 interface NavigationDrawerProps {
   isOpen: boolean;
@@ -93,18 +94,16 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
 
           {/* User Role Card */}
           {currentUser && (
-            <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant flex items-center justify-between">
-              <div>
+            <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant flex items-center justify-between gap-2">
+              <div className="min-w-0">
                 <span className="text-label-xs text-on-surface-variant block">
                   {language === 'ar' ? 'المستخدم الحالي' : 'Active Account'}
                 </span>
-                <span className="text-body-sm font-bold text-on-surface">
+                <span className="text-body-sm font-bold text-on-surface block truncate" dir="auto" title={currentUser.fullName}>
                   {currentUser.fullName}
                 </span>
               </div>
-              <span className="px-2 py-0.5 rounded-full text-label-xs font-bold bg-primary text-on-primary uppercase">
-                {currentUser.role}
-              </span>
+              <RoleBadge role={currentUser.role} language={language} />
             </div>
           )}
 

@@ -460,17 +460,19 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
                 {language === 'ar' ? 'رقم هاتف إنستاباي الشخصي (مع الحفاظ على الصفر):' : 'InstaPay Personal Phone Number (with leading zero):'}
               </label>
               <input
-                type="text"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="off"
                 dir="ltr"
+                maxLength={11}
+                pattern="01[0125][0-9]{8}"
+                title={language === 'ar' ? 'رقم موبايل مصري من 11 رقماً' : 'Egyptian mobile number, 11 digits'}
                 required
                 value={instapayNumber}
-                onChange={(e) => setInstapayNumber(e.target.value)}
-                placeholder="01551234263"
+                onChange={(e) => setInstapayNumber(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                placeholder="01xxxxxxxxx"
                 className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest font-mono font-bold text-title-sm text-on-surface focus:outline-none focus:border-primary"
               />
-              <span className="text-label-xs text-on-surface-variant mt-1 block">
-                {language === 'ar' ? 'الرقم الحالي المعتمد: 01551234263' : 'Current active number: 01551234263'}
-              </span>
             </div>
 
             <div>
