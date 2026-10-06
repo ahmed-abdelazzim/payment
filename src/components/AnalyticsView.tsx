@@ -10,14 +10,21 @@ interface AnalyticsViewProps {
   rails: ProviderRail[];
   language: 'en' | 'ar';
   showToast: (msg: string) => void;
+  currentUser?: User | null;
+  workspace?: Workspace | null;
 }
 
 interface GoogleSheetConfig {
+  authType?: 'oauth' | 'webhook';
   sheetUrl: string | null;
   sheetName: string | null;
+  accountEmail?: string | null;
+  spreadsheetId?: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
   syncedCount: number;
+  isOAuthConfigured?: boolean;
+  googleClientId?: string | null;
 }
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
@@ -26,6 +33,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   rails,
   language,
   showToast,
+  currentUser,
+  workspace,
 }) => {
   // Filter States
   const [timeRange, setTimeRange] = useState<'today' | '7days' | 'thisMonth' | '30days' | 'all'>('7days');
@@ -37,25 +46,56 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   const [sheetsConfig, setSheetsConfig] = useState<GoogleSheetConfig>({
     sheetUrl: null,
     sheetName: null,
+    accountEmail: null,
+    spreadsheetId: null,
     connectedAt: null,
     lastSyncAt: null,
     syncedCount: 0,
+    isOAuthConfigured: false,
   });
   const [loadingSheets, setLoadingSheets] = useState<boolean>(true);
+  const [loadingOAuth, setLoadingOAuth] = useState<boolean>(false);
   const [isConnectModalOpen, setIsConnectModalOpen] = useState<boolean>(false);
-  const [isScriptModalOpen, setIsScriptModalOpen] = useState<boolean>(false);
+  const [isOAuthSetupModalOpen, setIsOAuthSetupModalOpen] = useState<boolean>(false);
   const [isDisconnectConfirmOpen, setIsDisconnectConfirmOpen] = useState<boolean>(false);
+  const [isScriptModalOpen, setIsScriptModalOpen] = useState<boolean>(false);
   const [sheetUrlInput, setSheetUrlInput] = useState<string>('');
   const [sheetNameInput, setSheetNameInput] = useState<string>('');
+  const [platformClientIdInput, setPlatformClientIdInput] = useState<string>('');
+  const [platformClientSecretInput, setPlatformClientSecretInput] = useState<string>('');
+  const [savingPlatformOAuth, setSavingPlatformOAuth] = useState<boolean>(false);
   const [testingWebhook, setTestingWebhook] = useState<boolean>(false);
   const [syncingAll, setSyncingAll] = useState<boolean>(false);
   const [savingSheet, setSavingSheet] = useState<boolean>(false);
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
+  const [copiedRedirectUri, setCopiedRedirectUri] = useState<boolean>(false);
 
-  // Fetch Google Sheets configuration on mount
+  // Fetch Google Sheets configuration on mount and listen for OAuth callback
   useEffect(() => {
     fetchSheetsConfig();
-  }, []);
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('google_connected') === 'true') {
+        showToast(
+          language === 'ar'
+            ? 'تم ربط حساب Google وإنشاء ملف Google Sheet بنجاح! يتم الآن تسجيل العمليات تلقائياً.'
+            : 'Google account connected & spreadsheet created successfully! Real-time syncing active.'
+        );
+        const cleanUrl = window.location.pathname + (params.get('tab') ? `?tab=${params.get('tab')}` : '');
+        window.history.replaceState({}, '', cleanUrl);
+      } else if (params.get('google_error')) {
+        const err = params.get('google_error');
+        showToast(
+          language === 'ar'
+            ? `فشل الربط بحساب Google: ${decodeURIComponent(err || '')}`
+            : `Google connection failed: ${decodeURIComponent(err || '')}`
+        );
+        const cleanUrl = window.location.pathname + (params.get('tab') ? `?tab=${params.get('tab')}` : '');
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    }
+  }, [language, showToast]);
 
   const fetchSheetsConfig = async () => {
     try {
@@ -221,9 +261,77 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   }, [rails]);
 
   // Handlers for Google Sheets Actions
-  const handleConnectSheet = async () => {
+
+  // 1-Click Google OAuth Sign-in & Auto-linking
+  const handleGoogleOAuthSignIn = async () => {
+    try {
+      setLoadingOAuth(true);
+      const res = await apiFetch('/api/v1/integrations/google-sheets/oauth-url');
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'فشل الاتصال بخدمة Google');
+      }
+
+      if (data.isConfigured && data.authUrl) {
+        window.location.href = data.authUrl;
+      } else {
+        setPlatformClientIdInput(data.googleClientId || '');
+        setIsOAuthSetupModalOpen(true);
+      }
+    } catch (err: any) {
+      showToast(err.message || (language === 'ar' ? 'فشل بدء تسجيل الدخول بجوجل' : 'Failed to start Google sign-in'));
+    } finally {
+      setLoadingOAuth(false);
+    }
+  };
+
+  // Save Platform Google OAuth Credentials (for Admin / Platform Owner)
+  const handleSavePlatformOAuth = async () => {
+    if (!platformClientIdInput.trim() || !platformClientSecretInput.trim()) {
+      showToast(language === 'ar' ? 'يرجى إدخال Client ID و Client Secret' : 'Please provide Client ID & Secret');
+      return;
+    }
+
+    try {
+      setSavingPlatformOAuth(true);
+      const res = await apiFetch('/api/v1/platform/settings/google-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: platformClientIdInput.trim(),
+          clientSecret: platformClientSecretInput.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'فشل حفظ إعدادات Google OAuth');
+      }
+
+      showToast(
+        language === 'ar'
+          ? 'تم حفظ إعدادات Google OAuth بنجاح! سيتم توجيهك الآن للمصادقة.'
+          : 'Google OAuth credentials saved! Redirecting to Google...'
+      );
+      setIsOAuthSetupModalOpen(false);
+      await fetchSheetsConfig();
+
+      const nextRes = await apiFetch('/api/v1/integrations/google-sheets/oauth-url');
+      const nextData = await nextRes.json();
+      if (nextData.isConfigured && nextData.authUrl) {
+        window.location.href = nextData.authUrl;
+      }
+    } catch (err: any) {
+      showToast(err.message || 'تعذر حفظ البيانات');
+    } finally {
+      setSavingPlatformOAuth(false);
+    }
+  };
+
+  // Connect Google Sheet directly by URL or ID
+  const handleConnectDirectSheet = async () => {
     if (!sheetUrlInput.trim()) {
-      showToast(language === 'ar' ? 'يرجى إدخال رابط Google Sheets Webhook' : 'Please enter the Google Sheets Webhook URL');
+      showToast(language === 'ar' ? 'يرجى إدخال رابط ملف Google Sheet' : 'Please enter the Google Sheet URL');
       return;
     }
 
@@ -234,7 +342,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: sheetUrlInput.trim(),
-          name: sheetNameInput.trim() || 'Google Sheet - مدفوعات صرّاف',
+          name: sheetNameInput.trim() || (language === 'ar' ? 'صرّاف - سجل المدفوعات' : 'Sarraf Payments Sheet'),
         }),
       });
 
@@ -245,7 +353,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       showToast(
         language === 'ar'
-          ? 'تم ربط Google Sheet بنجاح! سيتم تسجيل جميع المدفوعات الجديدة لحظياً.'
+          ? 'تم ربط Google Sheet بنجاح! سيتم تسجيل جميع المدفوعات المؤكدة لحظياً.'
           : 'Google Sheet connected successfully! Real-time syncing active.'
       );
       setIsConnectModalOpen(false);
@@ -259,6 +367,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     }
   };
 
+  // Disconnect active Google Sheet
   const handleDisconnectSheet = async () => {
     try {
       setSavingSheet(true);
@@ -284,10 +393,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     }
   };
 
+  // Ping test
   const handleTestConnection = async () => {
     const targetUrl = sheetUrlInput.trim() || sheetsConfig.sheetUrl;
     if (!targetUrl) {
-      showToast(language === 'ar' ? 'لا يوجد رابط لاختباره' : 'No webhook URL to test');
+      showToast(language === 'ar' ? 'لا يوجد ملف لاختباره' : 'No sheet URL to test');
       return;
     }
 
@@ -312,8 +422,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     }
   };
 
+  // Sync / backfill all transactions to Sheet
   const handleSyncAllToSheet = async () => {
-    if (!sheetsConfig.sheetUrl) {
+    if (!sheetsConfig.sheetUrl && !sheetsConfig.spreadsheetId) {
       showToast(language === 'ar' ? 'يرجى ربط Google Sheet أولاً' : 'Please connect a Google Sheet first');
       return;
     }
@@ -1005,10 +1116,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                 <h2 className="text-headline-sm font-bold text-on-surface">
                   {language === 'ar' ? 'المزامنة الحية مع Google Sheets' : 'Google Sheets Real-time Sync'}
                 </h2>
-                {sheetsConfig.sheetUrl ? (
+                {sheetsConfig.sheetUrl || sheetsConfig.spreadsheetId ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 font-bold text-label-xs">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    {language === 'ar' ? 'متصل وجاهز للترحيل اللحظي' : 'Connected & Active'}
+                    {sheetsConfig.accountEmail
+                      ? language === 'ar'
+                        ? `متصل بحساب: ${sheetsConfig.accountEmail}`
+                        : `Connected: ${sheetsConfig.accountEmail}`
+                      : language === 'ar'
+                      ? 'متصل وجاهز للترحيل اللحظي'
+                      : 'Connected & Active'}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container border border-outline-variant text-on-surface-variant font-bold text-label-xs">
@@ -1019,7 +1136,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               </div>
               <p className="text-body-sm text-on-surface-variant mt-0.5">
                 {language === 'ar'
-                  ? 'أي عملية دفع مؤكدة أو واردة جديدة تُضاف فوراً في سطر جديد داخل ملف Google Sheet الخاص بك أونلاين.'
+                  ? 'تسجيل كل عملية دفع مؤكدة تلقائياً في سطر جديد داخل ملف Google Sheet الخاص بك دون الحاجة لأي تدخّل يدوي.'
                   : 'Every confirmed inbound transaction is automatically appended as a new row to your online Google Sheet.'}
               </p>
             </div>
@@ -1027,16 +1144,35 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
           {/* Integration Actions */}
           <div className="flex items-center flex-wrap gap-2.5">
-            <button
-              onClick={() => setIsScriptModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant text-label-sm font-bold text-on-surface hover:bg-surface-container active:scale-95 transition-all cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-base">code</span>
-              <span>{language === 'ar' ? 'كود السكريبت الجاهز' : 'View Script Code'}</span>
-            </button>
+            {/* Platform Admin Google OAuth Setup Button */}
+            {(currentUser?.role === 'owner' || currentUser?.isPlatformAdmin || !sheetsConfig.isOAuthConfigured) && (
+              <button
+                onClick={() => {
+                  setPlatformClientIdInput(sheetsConfig.googleClientId || '');
+                  setIsOAuthSetupModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:text-on-surface hover:bg-surface-container active:scale-95 transition-all cursor-pointer"
+                title={language === 'ar' ? 'إعدادات Google OAuth للمنصة' : 'Platform Google OAuth Settings'}
+              >
+                <span className="material-symbols-outlined text-base">settings</span>
+                <span>{language === 'ar' ? 'إعدادات Google API' : 'Google API Setup'}</span>
+              </button>
+            )}
 
-            {sheetsConfig.sheetUrl ? (
+            {sheetsConfig.sheetUrl || sheetsConfig.spreadsheetId ? (
               <>
+                {sheetsConfig.sheetUrl && (
+                  <a
+                    href={sheetsConfig.sheetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-label-sm font-bold shadow-xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-base">open_in_new</span>
+                    <span>{language === 'ar' ? 'فتح الشيت في Google Drive' : 'Open in Google Drive'}</span>
+                  </a>
+                )}
+
                 <button
                   onClick={handleTestConnection}
                   disabled={testingWebhook}
@@ -1067,71 +1203,227 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                   <span>{language === 'ar' ? 'إلغاء الربط' : 'Disconnect'}</span>
                 </button>
               </>
-            ) : (
-              <button
-                onClick={() => setIsConnectModalOpen(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-label-sm font-bold shadow-xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-base">add_link</span>
-                <span>{language === 'ar' ? 'ربط شيت جديد الآن' : 'Connect New Sheet'}</span>
-              </button>
-            )}
+            ) : null}
           </div>
         </div>
 
         {/* Integration Details / Info Cards */}
-        {sheetsConfig.sheetUrl ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
-            <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
-              <span className="text-label-xs text-on-surface-variant block mb-1">
-                {language === 'ar' ? 'اسم الشيت المرتبط' : 'Connected Sheet Name'}
-              </span>
-              <p className="text-body-md font-bold text-on-surface truncate" title={sheetsConfig.sheetName || ''}>
-                {sheetsConfig.sheetName || (language === 'ar' ? 'شيت المعاملات' : 'Transactions Sheet')}
-              </p>
+        {sheetsConfig.sheetUrl || sheetsConfig.spreadsheetId ? (
+          <div className="space-y-4 mt-5">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
+                <span className="text-label-xs text-on-surface-variant block mb-1">
+                  {language === 'ar' ? 'اسم الشيت المرتبط' : 'Connected Sheet'}
+                </span>
+                <p className="text-body-md font-bold text-on-surface truncate" title={sheetsConfig.sheetName || ''}>
+                  {sheetsConfig.sheetName || (language === 'ar' ? 'صرّاف - سجل المدفوعات' : 'Transactions Sheet')}
+                </p>
+                {sheetsConfig.sheetUrl && (
+                  <a
+                    href={sheetsConfig.sheetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-label-xs text-emerald-600 font-bold hover:underline mt-1"
+                  >
+                    <span>{language === 'ar' ? 'عرض الملف' : 'View File'}</span>
+                    <span className="material-symbols-outlined text-xs">launch</span>
+                  </a>
+                )}
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
+                <span className="text-label-xs text-on-surface-variant block mb-1">
+                  {language === 'ar' ? 'حساب Google المرتبط' : 'Google Account'}
+                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.15z"/>
+                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                  </svg>
+                  <p className="text-body-sm font-bold text-on-surface truncate" title={sheetsConfig.accountEmail || ''}>
+                    {sheetsConfig.accountEmail || (language === 'ar' ? 'ربط مباشر' : 'Direct Link')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
+                <span className="text-label-xs text-on-surface-variant block mb-1">
+                  {language === 'ar' ? 'العمليات المرحلة بنجاح' : 'Synced Rows Count'}
+                </span>
+                <p className="text-body-md font-code-num font-bold text-emerald-600">
+                  {sheetsConfig.syncedCount} {language === 'ar' ? 'معاملة مسجلة' : 'rows logged'}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
+                <span className="text-label-xs text-on-surface-variant block mb-1">
+                  {language === 'ar' ? 'آخر مزامنة تمت' : 'Last Synced'}
+                </span>
+                <p className="text-body-md font-code-num font-medium text-on-surface">
+                  {sheetsConfig.lastSyncAt
+                    ? formatDate(sheetsConfig.lastSyncAt, language, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                    : language === 'ar'
+                    ? 'بانتظار أول عملية'
+                    : 'Pending first transaction'}
+                </p>
+              </div>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
-              <span className="text-label-xs text-on-surface-variant block mb-1">
-                {language === 'ar' ? 'العمليات المرحلة بنجاح' : 'Synced Rows Count'}
-              </span>
-              <p className="text-body-md font-code-num font-bold text-emerald-600">
-                {sheetsConfig.syncedCount} {language === 'ar' ? 'معاملة مسجلة' : 'rows logged'}
-              </p>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/60">
-              <span className="text-label-xs text-on-surface-variant block mb-1">
-                {language === 'ar' ? 'آخر مزامنة تمت' : 'Last Synced'}
-              </span>
-              <p className="text-body-md font-code-num font-medium text-on-surface">
-                {sheetsConfig.lastSyncAt
-                  ? formatDate(sheetsConfig.lastSyncAt, language, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                  : language === 'ar'
-                  ? 'بانتظار أول عملية'
-                  : 'Pending first transaction'}
-              </p>
+            <div className="p-3.5 rounded-xl bg-emerald-600/5 border border-emerald-600/20 text-label-sm text-emerald-800 dark:text-emerald-200 flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-600 text-lg shrink-0">bolt</span>
+                <span>
+                  {language === 'ar'
+                    ? 'الترحيل اللحظي نشط: أي دفعة جديدة مؤكدة على فودافون كاش، إنستاباي، أو أورنج تُضاف فوراً في سطر جديد.'
+                    : 'Real-time sync active: Every confirmed payment on Vodafone Cash, InstaPay, or Orange appends a row immediately.'}
+                </span>
+              </div>
+              <button
+                onClick={() => setIsDisconnectConfirmOpen(true)}
+                className="text-label-xs text-error hover:underline cursor-pointer font-bold"
+              >
+                {language === 'ar' ? 'تغيير الشيت أو إلغاء الربط' : 'Switch Sheet / Disconnect'}
+              </button>
             </div>
           </div>
         ) : (
-          <div className="mt-5 p-4 rounded-xl bg-surface-container-low border border-dashed border-outline-variant text-center flex flex-col items-center justify-center gap-2">
-            <span className="material-symbols-outlined text-4xl text-on-surface-variant">link</span>
-            <p className="text-body-sm font-semibold text-on-surface max-w-lg">
-              {language === 'ar'
-                ? 'اربط ملف Google Sheet الخاص بك لتسجيل كل مدفوعة تحدث فورياً بدون أي تأخير، مع إمكانية إلغاء الربط وربط شيت جديد في أي وقت تشاء.'
-                : 'Connect your Google Sheet to append every payment automatically in real-time, with full freedom to disconnect or link a new sheet anytime.'}
-            </p>
-            <button
-              onClick={() => setIsConnectModalOpen(true)}
-              className="mt-2 px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-label-sm hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer shadow-xs"
-            >
-              {language === 'ar' ? 'بدء الربط في دقيقتين' : 'Connect in 2 Minutes'}
-            </button>
+          /* NOT CONNECTED: Two Clean, Hassle-Free Options */
+          <div className="mt-5 space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+              {/* PRIMARY METHOD: 1-Click Google OAuth Hero */}
+              <div className="lg:col-span-7 p-6 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-surface-container-low to-surface-container border-2 border-emerald-500/40 flex flex-col justify-between shadow-xs">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-600/10 border border-emerald-600/20 text-emerald-700 dark:text-emerald-300 font-bold text-label-xs mb-3">
+                    <span className="material-symbols-outlined text-sm">bolt</span>
+                    {language === 'ar' ? 'الربط التلقائي الفوري (بضغطة زر واحدة)' : 'Recommended 1-Click Auto-Connect'}
+                  </div>
+
+                  <h3 className="text-title-lg font-extrabold text-on-surface mb-2">
+                    {language === 'ar' ? 'تسجيل الدخول بحساب Google والربط التلقائي' : 'Sign in with Google & Link Automatically'}
+                  </h3>
+
+                  <p className="text-body-sm text-on-surface-variant mb-4 leading-relaxed">
+                    {language === 'ar'
+                      ? 'دون كتابة أي كود أو إعدادات يدوية معقدة. اضغط الزر بالأسفل وسيقوم صرّاف بإنشاء ملف شيت منسق باسم "صرّاف - سجل المدفوعات" تلقائياً في حساب Google Drive الخاص بك وبدء تسجيل المعاملات لحظياً.'
+                      : 'Zero code, zero manual scripts. Click below and Sarraf will automatically create a dedicated sheet in your Google Drive and begin streaming payments in real-time.'}
+                  </p>
+
+                  <div className="space-y-2 mb-6 text-label-sm font-semibold text-on-surface">
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-emerald-600 text-base shrink-0">check_circle</span>
+                      <span>{language === 'ar' ? 'إنشاء ملف Google Sheet منسق تلقائياً مع تجميد عناوين الأعمدة' : 'Auto-creates formatted Google Sheet with frozen headers'}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-emerald-600 text-base shrink-0">check_circle</span>
+                      <span>{language === 'ar' ? 'ترحيل مباشر عبر Google Sheets API v4 الرسمي فائق السرعة' : 'Direct streaming via official Google Sheets API v4'}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-emerald-600 text-base shrink-0">check_circle</span>
+                      <span>{language === 'ar' ? 'حرية تامة: يمكنك إلغاء الربط أو تغيير الشيت في أي وقت' : 'Full freedom: disconnect or switch sheets anytime'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <button
+                    onClick={handleGoogleOAuthSignIn}
+                    disabled={loadingOAuth}
+                    className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-white hover:bg-neutral-50 text-neutral-900 border border-neutral-300 font-bold text-label-md shadow-sm hover:shadow-md active:scale-98 transition-all flex items-center justify-center gap-3 cursor-pointer disabled:opacity-50"
+                  >
+                    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.15z"/>
+                      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+                      <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                    </svg>
+                    <span>
+                      {loadingOAuth
+                        ? (language === 'ar' ? 'جاري الاتصال بـ Google...' : 'Connecting to Google...')
+                        : (language === 'ar' ? 'تسجيل الدخول بحساب Google والربط الفوري' : 'Sign in with Google & Link Instantly')}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* SECONDARY METHOD: Direct Paste Sheet URL */}
+              <div className="lg:col-span-5 p-6 rounded-2xl bg-surface-container-low border border-outline-variant flex flex-col justify-between">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-highest border border-outline-variant text-on-surface-variant font-bold text-label-xs mb-3">
+                    <span className="material-symbols-outlined text-sm">link</span>
+                    {language === 'ar' ? 'الخيار الثاني: ملف موجود لديك' : 'Option 2: Existing Sheet'}
+                  </div>
+
+                  <h4 className="text-title-md font-bold text-on-surface mb-1.5">
+                    {language === 'ar' ? 'أو الصق رابط شيت من Google Drive' : 'Or Paste an Existing Sheet URL'}
+                  </h4>
+
+                  <p className="text-body-xs text-on-surface-variant mb-4">
+                    {language === 'ar'
+                      ? 'إذا كان لديك ملف Google Sheet ترغب بربطه تحديداً، افتحه في المتصفح وانسخ الرابط من شريط العنوان والصقه هنا.'
+                      : 'If you already have a Google Sheet you want to use, copy its link from your browser and paste it below.'}
+                  </p>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-label-xs font-bold text-on-surface block mb-1">
+                        {language === 'ar' ? 'رابط ملف Google Sheet' : 'Google Sheet URL'}
+                      </label>
+                      <input
+                        type="url"
+                        value={sheetUrlInput}
+                        onChange={(e) => setSheetUrlInput(e.target.value)}
+                        placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                        className="w-full h-10 px-3 bg-surface-container-lowest border border-outline-variant rounded-xl text-body-xs font-code-num text-on-surface focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-label-xs font-bold text-on-surface block mb-1">
+                        {language === 'ar' ? 'اسم الملف أو الغرض (اختياري)' : 'Friendly Name (Optional)'}
+                      </label>
+                      <input
+                        type="text"
+                        value={sheetNameInput}
+                        onChange={(e) => setSheetNameInput(e.target.value)}
+                        placeholder={language === 'ar' ? 'مثال: شيت مبيعات المحل 2026' : 'e.g. Store Sales Sheet 2026'}
+                        className="w-full h-10 px-3 bg-surface-container-lowest border border-outline-variant rounded-xl text-body-xs text-on-surface focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-outline-variant/60">
+                  <button
+                    onClick={handleConnectDirectSheet}
+                    disabled={savingSheet || !sheetUrlInput.trim()}
+                    className="w-full px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-label-sm hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {savingSheet
+                      ? (language === 'ar' ? 'جاري الحفظ...' : 'Connecting...')
+                      : (language === 'ar' ? 'حفظ وربط هذا الملف' : 'Save & Connect This Sheet')}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Subtle Developer Fallback link */}
+            <div className="pt-2 text-center">
+              <button
+                onClick={() => setIsScriptModalOpen(true)}
+                className="text-label-xs text-on-surface-variant hover:text-on-surface underline transition-colors cursor-pointer"
+              >
+                {language === 'ar'
+                  ? 'خيارات متقدمة للمطورين (سكريبت Webhook يدوي)'
+                  : 'Advanced Developer Options (Manual Webhook Script)'}
+              </button>
+            </div>
           </div>
         )}
       </section>
 
-      {/* Connect Modal */}
+      {/* Direct Connect Modal */}
       {isConnectModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
@@ -1139,12 +1431,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-emerald-600 text-2xl">table_chart</span>
                 <h3 className="text-title-lg font-bold text-on-surface">
-                  {language === 'ar' ? 'ربط Google Sheet جديد' : 'Connect Google Sheet'}
+                  {language === 'ar' ? 'ربط ملف Google Sheet' : 'Connect Google Sheet'}
                 </h3>
               </div>
               <button
                 onClick={() => setIsConnectModalOpen(false)}
-                className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg"
+                className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg cursor-pointer"
               >
                 <span className="material-symbols-outlined">close</span>
               </button>
@@ -1166,20 +1458,20 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
               <div>
                 <label className="text-label-sm font-bold text-on-surface block mb-1">
-                  {language === 'ar' ? 'رابط Google Web App Webhook' : 'Google Web App Webhook URL'}{' '}
+                  {language === 'ar' ? 'رابط ملف Google Sheet أو معرف الشيت' : 'Google Sheet URL or ID'}{' '}
                   <span className="text-error">*</span>
                 </label>
                 <input
                   type="url"
                   value={sheetUrlInput}
                   onChange={(e) => setSheetUrlInput(e.target.value)}
-                  placeholder="https://script.google.com/macros/s/.../exec"
+                  placeholder="https://docs.google.com/spreadsheets/d/.../edit"
                   className="w-full h-11 px-3 bg-surface-container-low border border-outline-variant rounded-xl text-body-sm font-code-num text-on-surface focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
                 />
                 <p className="text-label-xs text-on-surface-variant mt-1.5">
                   {language === 'ar'
-                    ? 'انسخ كود السكريبت وضعه في Google Sheets > Extensions > Apps Script ثم اضغط Deploy > Web app واختر Who has access: Anyone.'
-                    : 'Paste the script code into Google Sheets > Apps Script and Deploy as Web app with access: Anyone.'}
+                    ? 'افتح ملفك على Google Sheets في المتصفح وانسخ رابطه من شريط العنوان والصقه هنا.'
+                    : 'Open your Google Sheet in browser, copy its URL from address bar and paste here.'}
                 </p>
               </div>
             </div>
@@ -1193,7 +1485,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               </button>
 
               <button
-                onClick={handleConnectSheet}
+                onClick={handleConnectDirectSheet}
                 disabled={savingSheet}
                 className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-label-md shadow-xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
               >
@@ -1219,8 +1511,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
             <p className="text-body-sm text-on-surface-variant">
               {language === 'ar'
-                ? 'هل أنت متأكد من إلغاء الربط مع هذا الشيت؟ لن يتم إرسال أي معاملات جديدة إليه بعد الآن. يمكنك ربط شيت جديد في أي وقت.'
-                : 'Are you sure you want to disconnect this Google Sheet? No future transactions will be sent to it. You can connect a new sheet anytime.'}
+                ? 'هل أنت متأكد من إلغاء الربط مع هذا الشيت؟ لن يتم إرسال أي معاملات جديدة إليه بعد الآن. يمكنك ربط شيت جديد في أي وقت تشاء بضغطة زر.'
+                : 'Are you sure you want to disconnect this Google Sheet? No future transactions will be sent to it. You can connect a new sheet anytime in 1 click.'}
             </p>
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-outline-variant">
@@ -1243,20 +1535,25 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         </div>
       )}
 
-      {/* Google Apps Script Code Modal */}
-      {isScriptModalOpen && (
+      {/* Platform Owner / Admin: Google OAuth Setup Modal */}
+      {isOAuthSetupModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl w-full max-w-2xl p-6 shadow-2xl space-y-4">
+          <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-emerald-600 text-2xl">terminal</span>
+                <svg className="w-6 h-6 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.15z"/>
+                  <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+                  <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.14-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+                  <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                </svg>
                 <h3 className="text-title-lg font-bold text-on-surface">
-                  {language === 'ar' ? 'سكريبت Google Apps Script للربط' : 'Google Apps Script Code'}
+                  {language === 'ar' ? 'إعداد ربط Google للمنصة' : 'Google OAuth Platform Setup'}
                 </h3>
               </div>
               <button
-                onClick={() => setIsScriptModalOpen(false)}
-                className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg"
+                onClick={() => setIsOAuthSetupModalOpen(false)}
+                className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg cursor-pointer"
               >
                 <span className="material-symbols-outlined">close</span>
               </button>
@@ -1264,8 +1561,107 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
             <p className="text-body-sm text-on-surface-variant">
               {language === 'ar'
-                ? 'انسخ الكود التالي وضعه في ملف Google Sheet الخاص بك (من القائمة: Extensions ثم Apps Script)، ثم اضغط Deploy > New deployment > Web app واختر Who has access: Anyone.'
-                : 'Copy this code into your Google Sheet (Extensions > Apps Script), then click Deploy > New deployment > Web app with Who has access set to Anyone.'}
+                ? 'لتمكين التجار من الربط بضغطة زر عبر تسجيل الدخول بحساب Google، أدخل بيانات اعتماد تطبيق Google Cloud Console هنا:'
+                : 'To enable 1-click Google Sign-in for all merchants, enter your Google Cloud OAuth credentials below:'}
+            </p>
+
+            {/* Redirect URI Display */}
+            <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant">
+              <div className="flex items-center justify-between text-label-xs text-on-surface-variant mb-1">
+                <span>{language === 'ar' ? 'رابط التوجيه المعتمد (Authorized Redirect URI):' : 'Authorized Redirect URI:'}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const uri = `${window.location.origin}/api/v1/integrations/google/callback`;
+                    navigator.clipboard.writeText(uri);
+                    setCopiedRedirectUri(true);
+                    showToast(language === 'ar' ? 'تم نسخ الرابط' : 'Redirect URI copied');
+                    setTimeout(() => setCopiedRedirectUri(false), 2000);
+                  }}
+                  className="text-primary hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-xs">
+                    {copiedRedirectUri ? 'check' : 'content_copy'}
+                  </span>
+                  <span>{copiedRedirectUri ? (language === 'ar' ? 'تم النسخ' : 'Copied') : language === 'ar' ? 'نسخ' : 'Copy'}</span>
+                </button>
+              </div>
+              <code className="text-xs font-mono text-on-surface break-all select-all">
+                {typeof window !== 'undefined' ? `${window.location.origin}/api/v1/integrations/google/callback` : '/api/v1/integrations/google/callback'}
+              </code>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-label-sm font-bold text-on-surface block mb-1">
+                  Google Client ID <span className="text-error">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={platformClientIdInput}
+                  onChange={(e) => setPlatformClientIdInput(e.target.value)}
+                  placeholder="xxxxx-xxxxx.apps.googleusercontent.com"
+                  className="w-full h-10 px-3 bg-surface-container-low border border-outline-variant rounded-xl text-body-xs font-mono text-on-surface focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="text-label-sm font-bold text-on-surface block mb-1">
+                  Google Client Secret <span className="text-error">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={platformClientSecretInput}
+                  onChange={(e) => setPlatformClientSecretInput(e.target.value)}
+                  placeholder="GOCSPX-xxxxxxxxxxxxxxxx"
+                  className="w-full h-10 px-3 bg-surface-container-low border border-outline-variant rounded-xl text-body-xs font-mono text-on-surface focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-outline-variant">
+              <button
+                onClick={() => setIsOAuthSetupModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-label-md font-semibold text-on-surface hover:bg-surface-container active:scale-95 transition-all cursor-pointer"
+              >
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
+              </button>
+
+              <button
+                onClick={handleSavePlatformOAuth}
+                disabled={savingPlatformOAuth}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-label-md shadow-xs hover:bg-emerald-700 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {savingPlatformOAuth ? (language === 'ar' ? 'جاري الحفظ...' : 'Saving...') : language === 'ar' ? 'حفظ وتفعيل الربط الفوري' : 'Save & Enable'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Legacy Developer Apps Script Code Modal (Advanced Fallback) */}
+      {isScriptModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl w-full max-w-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-600 text-2xl">terminal</span>
+                <h3 className="text-title-lg font-bold text-on-surface">
+                  {language === 'ar' ? 'خيارات متقدمة: سكريبت Webhook للمطورين' : 'Developer Advanced Webhook'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsScriptModalOpen(false)}
+                className="text-on-surface-variant hover:text-on-surface p-1 rounded-lg cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <p className="text-body-sm text-on-surface-variant">
+              {language === 'ar'
+                ? 'ملاحظة: لا يحتاج التجار العاديون لهذا السكريبت، فالربط التلقائي عبر تسجيل الدخول بـ Google يعمل مباشرة. هذا السكريبت مخصص فقط للمطورين الراغبين بربط Webhook مخصص.'
+                : 'Note: Normal merchants do not need this. 1-click Google Sign-in works out-of-the-box. This script is only for custom webhook deployments.'}
             </p>
 
             <div className="relative">

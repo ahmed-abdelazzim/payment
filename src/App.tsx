@@ -68,7 +68,14 @@ export default function App() {
   } = useAuth();
 
   // Navigation & Language
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      if (tabParam) return tabParam;
+    }
+    return 'dashboard';
+  });
   const [language, setLanguage] = useState<'en' | 'ar'>('ar');
 
   // Modals & Drawers state
@@ -592,6 +599,8 @@ export default function App() {
             rails={rails}
             language={language}
             showToast={showToast}
+            currentUser={currentUser}
+            workspace={workspace}
           />
         )}
 

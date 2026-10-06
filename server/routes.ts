@@ -2424,11 +2424,48 @@ apiRouter.get('/integrations/google-sheets', requireAuth, (req: AuthenticatedUse
   res.json(status);
 });
 
-// Connect new Google Sheet
+// Get Google OAuth 2.0 Authorization URL for 1-click connect
+apiRouter.get('/integrations/google-sheets/oauth-url', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.get('host');
+  const redirectUri = `${protocol}://${host}/api/v1/integrations/google/callback`;
+
+  const result = GoogleSheetsService.getOAuthAuthUrl(req.user!.organizationId, redirectUri);
+  res.json(result);
+});
+
+// Google OAuth 2.0 Redirect Callback
+apiRouter.get('/integrations/google/callback', async (req: Request, res: Response) => {
+  const { code, state, error } = req.query;
+  if (error || !code) {
+    res.redirect('/app?tab=analytics&google_error=' + encodeURIComponent((error as string) || 'ACCESS_DENIED'));
+    return;
+  }
+
+  const organizationId = state as string;
+  if (!organizationId) {
+    res.status(400).send('Invalid OAuth State');
+    return;
+  }
+
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.get('host');
+  const redirectUri = `${protocol}://${host}/api/v1/integrations/google/callback`;
+
+  try {
+    await GoogleSheetsService.handleOAuthCallback(code as string, organizationId, redirectUri);
+    res.redirect('/app?tab=analytics&google_connected=true');
+  } catch (err: any) {
+    console.error('Google OAuth callback error:', err);
+    res.redirect('/app?tab=analytics&google_error=' + encodeURIComponent(err.message || 'CONNECT_FAILED'));
+  }
+});
+
+// Connect existing Google Sheet by URL or ID (Direct URL or Webhook)
 apiRouter.post('/integrations/google-sheets/connect', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const { url, name } = req.body;
   if (!url || typeof url !== 'string') {
-    res.status(400).json({ error: 'URL_REQUIRED', message: 'يرجى إدخال رابط Google Sheets Webhook بشكل صحيح' });
+    res.status(400).json({ error: 'URL_REQUIRED', message: 'يرجى إدخال رابط Google Sheet أو رابط الـ Webhook بشكل صحيح' });
     return;
   }
 
@@ -2477,8 +2514,8 @@ apiRouter.post('/integrations/google-sheets/test', requireAuth, async (req: Auth
   }
 
   try {
-    const result = await GoogleSheetsService.testConnection(url);
-    res.json(result);
+    const result = await GoogleSheetsService.connectSheet(req.user!.organizationId, url);
+    res.json({ success: true, message: 'تم فحص الرابط بنجاح!' });
   } catch (err: any) {
     res.status(400).json({ error: 'TEST_FAILED', message: err.message || 'فشل الاتصال بالشيت' });
   }
@@ -2501,4 +2538,15 @@ apiRouter.post('/integrations/google-sheets/sync-all', requireAuth, requireRole(
   } catch (err: any) {
     res.status(400).json({ error: 'SYNC_ALL_FAILED', message: err.message || 'تعذر مزامنة المعاملات إلى الشيت' });
   }
+});
+
+// Platform Owner: Configure Google OAuth Client ID & Secret
+apiRouter.post('/platform/settings/google-oauth', requireAuth, requirePlatformOwner, (req: AuthenticatedUserRequest, res: Response) => {
+  const { clientId, clientSecret } = req.body;
+  if (!clientId || !clientSecret) {
+    res.status(400).json({ error: 'CREDENTIALS_REQUIRED', message: 'Client ID and Client Secret are required' });
+    return;
+  }
+  GoogleSheetsService.updatePlatformGoogleCredentials(clientId, clientSecret);
+  res.json({ message: 'تم حفظ بيانات Google OAuth بنجاح!' });
 });

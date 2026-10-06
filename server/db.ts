@@ -535,6 +535,30 @@ export function initSchema(db: DatabaseSync): void {
   try {
     db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_synced_count INTEGER DEFAULT 0').run();
   } catch {}
+  try {
+    db.prepare("ALTER TABLE organizations ADD COLUMN google_auth_type TEXT DEFAULT 'oauth'").run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_access_token TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_refresh_token TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_token_expiry TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_spreadsheet_id TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_account_email TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE platform_settings ADD COLUMN google_client_id TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE platform_settings ADD COLUMN google_client_secret TEXT').run();
+  } catch {}
 
   // SQLite does not support cross-table CHECK constraints. These triggers make
   // tenant/source relationships enforceable even when an internal script or a
