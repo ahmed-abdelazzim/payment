@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Transaction, Device, ProviderRail, Workspace, User, CurrentSubscription } from './types';
 import { Header } from './components/Header';
 import { DashboardView } from './components/DashboardView';
@@ -37,6 +37,8 @@ export default function App() {
   const [userWorkspaces, setUserWorkspaces] = useState<any[]>([]);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [currentSub, setCurrentSub] = useState<CurrentSubscription | null>(null);
+  const workspaceIdRef = useRef<string | undefined>(undefined);
+  workspaceIdRef.current = workspace?.id;
 
   // Core Data State (Loaded dynamically per tenant)
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -107,11 +109,24 @@ export default function App() {
     setCurrentPath(path.split('?')[0]);
   }, []);
 
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = (msg: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToastMessage(msg);
-    setTimeout(() => {
+    toastTimerRef.current = setTimeout(() => {
       setToastMessage(null);
+      toastTimerRef.current = null;
     }, 3500);
+  };
+
+  // The quick-start guide may auto-open ONCE per workspace; once the user closes it we never force it again.
+  const onboardingKey = (orgId?: string) => `sarraf_onboarding_dismissed_${orgId || 'default'}`;
+  const onboardingAutoShownRef = useRef<Set<string>>(new Set());
+  const dismissOnboarding = () => {
+    setIsOnboardingOpen(false);
+    try {
+      localStorage.setItem(onboardingKey(workspaceIdRef.current), '1');
+    } catch {}
   };
 
   // Fetch current user session and tenant context
@@ -247,9 +262,17 @@ export default function App() {
             : []
         );
 
-        // Prompt onboarding guide if tenant has 0 devices
+        // Suggest the onboarding guide for an empty workspace, but only once and never after dismissal
         if (Array.isArray(devData) && devData.length === 0) {
-          setIsOnboardingOpen(true);
+          const orgId = workspaceIdRef.current || 'default';
+          let dismissed = false;
+          try {
+            dismissed = localStorage.getItem(onboardingKey(orgId)) === '1';
+          } catch {}
+          if (!dismissed && !onboardingAutoShownRef.current.has(orgId)) {
+            onboardingAutoShownRef.current.add(orgId);
+            setIsOnboardingOpen(true);
+          }
         }
       }
     } catch {
@@ -273,6 +296,7 @@ export default function App() {
   useEffect(() => {
     if (!hasSession || !currentUser || !workspace) return;
     const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       refreshBackendData();
     }, 3000);
     return () => clearInterval(interval);
@@ -821,7 +845,7 @@ export default function App() {
       {/* Client Onboarding Guide / Launchpad Modal */}
       <OnboardingGuideModal
         isOpen={isOnboardingOpen}
-        onClose={() => setIsOnboardingOpen(false)}
+        onClose={dismissOnboarding}
         workspace={workspace}
         rails={rails}
         devices={devices}
