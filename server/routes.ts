@@ -20,6 +20,7 @@ import { AuditService } from './services/auditService';
 import { SubscriptionService } from './services/subscriptionService';
 import { hashPassword, verifyPassword } from './security/passwords';
 import { EmailService } from './services/emailService';
+import { GoogleSheetsService } from './services/googleSheetsService';
 
 export const apiRouter = Router();
 
@@ -1690,6 +1691,41 @@ apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDevi
     return;
   }
 
+  // Attempt automatic platform subscription match for incoming transfers
+  let autoActivatedOrderId: string | undefined;
+  let inReviewOrderId: string | undefined;
+  if (result.transactionId) {
+    try {
+      const matchOutcome = SubscriptionService.handleInboundPlatformTransaction({
+        id: result.transactionId,
+        amountMinor: toMinor(parsed.amount),
+        externalTrxId: result.externalTrxId,
+        senderPhone: parsed.senderPhone,
+        senderName: parsed.senderName,
+        organizationId: deviceCtx.organizationId,
+        paymentSourceId: deviceCtx.paymentSourceId,
+      });
+      autoActivatedOrderId = matchOutcome.autoActivatedOrderId;
+      inReviewOrderId = matchOutcome.inReviewOrderId;
+    } catch (err) {
+      console.error('Error matching inbound platform transaction for subscription:', err);
+    }
+
+    // Google Sheets Real-Time Sync (if merchant connected a sheet)
+    GoogleSheetsService.syncTransaction(deviceCtx.organizationId, {
+      id: result.transactionId,
+      externalTrxId: result.externalTrxId,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      provider: parsed.provider,
+      senderName: parsed.senderName,
+      senderPhone: parsed.senderPhone,
+      status: result.status,
+      balanceAfter: result.balanceAfter,
+      financialEventAt: device_captured_at || new Date().toISOString(),
+    }).catch((err) => console.warn('Google Sheets sync async error:', err));
+  }
+
   // Return 202 Accepted
   res.status(202).json({
     status: 'accepted',
@@ -1700,6 +1736,8 @@ apiRouter.post('/devices/ingest', verifyDeviceSignature, (req: AuthenticatedDevi
     balance_after: result.balanceAfter,
     review_required: result.status === 'review_required',
     review_reason: result.reviewReason,
+    subscription_auto_activated_order_id: autoActivatedOrderId,
+    subscription_in_review_order_id: inReviewOrderId,
   });
 });
 
@@ -1925,6 +1963,21 @@ apiRouter.post('/transactions/:id/approve', requireAuth, requireRole(['owner', '
     });
 
     db.exec('COMMIT;');
+
+    // Sync manually approved transaction to Google Sheets
+    GoogleSheetsService.syncTransaction(req.user!.organizationId, {
+      id: trx.id,
+      externalTrxId: trx.external_trx_id,
+      amount: fromMinor(amountMinor),
+      currency: trx.currency,
+      provider: trx.provider,
+      senderName: trx.sender_name,
+      senderPhone: trx.sender_phone,
+      status: 'confirmed',
+      balanceAfter: fromMinor(nextMinor),
+      financialEventAt: trx.financial_event_at,
+    }).catch((err) => console.warn('Google Sheets sync async error:', err));
+
     res.json({ message: 'Transaction verified, ledger updated, and delivery queued.', balanceAfter: fromMinor(nextMinor) });
   } catch (err: any) {
     try { db.exec('ROLLBACK;'); } catch {}
@@ -2081,26 +2134,32 @@ apiRouter.post('/subscriptions/orders', requireAuth, requireRole(['owner', 'admi
 
 // Report Payment Execution (Submitting InstaPay transfer reference & sender info)
 apiRouter.post('/subscriptions/orders/:id/report-payment', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
-  const { reportedTransferRef, reportedSenderInfo, reportedTransferTime, reportedNotes } = req.body;
+  const { reportedTransferRef, reportedSenderInfo, reportedSenderPhone, reportedTransferTime, reportedNotes } = req.body;
   try {
     const result = SubscriptionService.reportPayment({
       orderId: req.params.id,
       organizationId: req.user!.organizationId,
       reportedTransferRef,
       reportedSenderInfo,
+      reportedSenderPhone,
       reportedTransferTime,
       reportedNotes,
     });
 
+    let message = 'تم استلام بيانات التحويل، وجارٍ التحقق والمطابقة مع رسائل الاستقبال في حساب المنصة.';
+    if (result.matched) {
+      message = '🎉 تم التحقق من استلام المبلغ ومطابقة رقم هاتفك بنجاح، وتم تفعيل باقتك أوتوماتيكياً!';
+    } else if (result.order.status === 'in_review' && result.order.review_notes?.includes('أقل من قيمة الباقة')) {
+      message = '⚠️ تم رصد التحويل بنجاح، ولكن المبلغ المحول أقل من سعر الباقة المطلوبة. تم تعليق الطلب للمراجعة اليدوية.';
+    }
+
     res.json({
       order: result.order,
       matched: result.matched,
-      message: result.matched
-        ? 'تمت مطابقة التحويل وتفعيل الاشتراك بنجاح!'
-        : 'تم استلام بيانات التحويل، وجارٍ التحقق والمطابقة مع رسائل الاستقبال في حساب المنصة.',
+      message,
     });
   } catch (err: any) {
-    res.status(400).json({ error: 'REPORT_PAYMENT_FAILED', message: 'Unable to submit the payment report at this time.' });
+    res.status(400).json({ error: 'REPORT_PAYMENT_FAILED', message: err.message || 'Unable to submit the payment report at this time.' });
   }
 });
 
@@ -2353,4 +2412,93 @@ apiRouter.post('/simulator/ingest', (req: Request, res: Response) => {
     error: 'SIMULATOR_DISABLED',
     message: 'Simulator endpoints are strictly disabled in production customer environments. Use authenticated device protocol at /api/v1/devices/ingest.',
   });
+});
+
+// ==========================================
+// 9. GOOGLE SHEETS LIVE INTEGRATION ROUTES
+// ==========================================
+
+// Get current Google Sheets integration status
+apiRouter.get('/integrations/google-sheets', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const status = GoogleSheetsService.getStatus(req.user!.organizationId);
+  res.json(status);
+});
+
+// Connect new Google Sheet
+apiRouter.post('/integrations/google-sheets/connect', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const { url, name } = req.body;
+  if (!url || typeof url !== 'string') {
+    res.status(400).json({ error: 'URL_REQUIRED', message: 'يرجى إدخال رابط Google Sheets Webhook بشكل صحيح' });
+    return;
+  }
+
+  try {
+    const updated = GoogleSheetsService.connectSheet(req.user!.organizationId, url, name);
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'GOOGLE_SHEETS_CONNECTED',
+      resourceType: 'integration',
+      resourceId: 'google_sheets',
+      originIp: req.ip,
+      details: { url, name },
+    });
+    res.json({ message: 'تم ربط Google Sheet بنجاح!', config: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: 'CONNECT_FAILED', message: err.message || 'تعذر ربط Google Sheet' });
+  }
+});
+
+// Disconnect Google Sheet
+apiRouter.post('/integrations/google-sheets/disconnect', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  try {
+    GoogleSheetsService.disconnectSheet(req.user!.organizationId);
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'GOOGLE_SHEETS_DISCONNECTED',
+      resourceType: 'integration',
+      resourceId: 'google_sheets',
+      originIp: req.ip,
+      details: {},
+    });
+    res.json({ message: 'تم إلغاء الربط مع Google Sheet بنجاح، ولن يتم إرسال أي معاملات جديدة إليه.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'DISCONNECT_FAILED', message: 'تعذر إلغاء الربط' });
+  }
+});
+
+// Test Connection
+apiRouter.post('/integrations/google-sheets/test', requireAuth, async (req: AuthenticatedUserRequest, res: Response) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string') {
+    res.status(400).json({ error: 'URL_REQUIRED', message: 'رابط الشيت مطلوب للاختبار' });
+    return;
+  }
+
+  try {
+    const result = await GoogleSheetsService.testConnection(url);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: 'TEST_FAILED', message: err.message || 'فشل الاتصال بالشيت' });
+  }
+});
+
+// Backfill / Sync all historical transactions
+apiRouter.post('/integrations/google-sheets/sync-all', requireAuth, requireRole(['owner', 'admin']), async (req: AuthenticatedUserRequest, res: Response) => {
+  try {
+    const outcome = await GoogleSheetsService.syncAllTransactions(req.user!.organizationId);
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'GOOGLE_SHEETS_BATCH_SYNC',
+      resourceType: 'integration',
+      resourceId: 'google_sheets',
+      originIp: req.ip,
+      details: { syncedCount: outcome.syncedCount },
+    });
+    res.json({ message: `تمت مزامنة ${outcome.syncedCount} معاملة بنجاح إلى Google Sheet!`, syncedCount: outcome.syncedCount });
+  } catch (err: any) {
+    res.status(400).json({ error: 'SYNC_ALL_FAILED', message: err.message || 'تعذر مزامنة المعاملات إلى الشيت' });
+  }
 });

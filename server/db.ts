@@ -73,6 +73,11 @@ export function initSchema(db: DatabaseSync): void {
       name_ar TEXT NOT NULL,
       slug TEXT UNIQUE NOT NULL,
       default_timezone TEXT DEFAULT 'Africa/Cairo',
+      google_sheet_url TEXT,
+      google_sheet_name TEXT,
+      google_sheet_connected_at TEXT,
+      google_sheet_last_sync_at TEXT,
+      google_sheet_synced_count INTEGER DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -420,6 +425,7 @@ export function initSchema(db: DatabaseSync): void {
       status TEXT NOT NULL CHECK (status IN ('pending_payment', 'payment_reported', 'in_review', 'confirmed', 'rejected', 'expired')),
       reported_transfer_ref TEXT,
       reported_sender_info TEXT,
+      reported_sender_phone TEXT,
       reported_transfer_time TEXT,
       reported_notes TEXT,
       reported_at TEXT,
@@ -510,6 +516,24 @@ export function initSchema(db: DatabaseSync): void {
   } catch {}
   try {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_devices_payment_source ON devices(payment_source_id)').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE subscription_orders ADD COLUMN reported_sender_phone TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_url TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_name TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_connected_at TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_last_sync_at TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN google_sheet_synced_count INTEGER DEFAULT 0').run();
   } catch {}
 
   // SQLite does not support cross-table CHECK constraints. These triggers make

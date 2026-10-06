@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
 import { formatDate } from '../utils/formatters';
+import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUtils';
 
 interface AuditLogEntry {
   id: string;
@@ -84,6 +85,68 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
     fetchAllData();
   }, []);
 
+  const handleExportCsv = () => {
+    if (activeTab === 'raw_events') {
+      const columns: ExportColumn<RawEventEntry>[] = [
+        { header: 'Event ID', headerAr: 'معرف الحدث', key: 'id' },
+        { header: 'Adapter', headerAr: 'البروتوكول', key: 'adapter_type' },
+        { header: 'Device', headerAr: 'الجهاز', accessor: (r) => r.device_name || r.device_number || '-' },
+        { header: 'Payload', headerAr: 'نص الرسالة', key: 'raw_payload' },
+        { header: 'Status', headerAr: 'الحالة', key: 'processing_status' },
+        { header: 'Timestamp', headerAr: 'توقيت الاستلام', key: 'server_received_at' },
+      ];
+      exportToCsv(`sarraf_raw_events_${new Date().toISOString().slice(0, 10)}`, columns, rawEvents, language);
+    } else {
+      const columns: ExportColumn<AuditLogEntry>[] = [
+        { header: 'Time', headerAr: 'الوقت', key: 'time' },
+        { header: 'Actor', headerAr: 'الفاعل', key: 'actor' },
+        { header: 'Action', headerAr: 'الإجراء', key: 'action' },
+        { header: 'Resource', headerAr: 'الكيان', key: 'resource' },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'IP Address', headerAr: 'عنوان IP', key: 'ip' },
+        { header: 'Details', headerAr: 'التفاصيل', key: 'details' },
+      ];
+      exportToCsv(`sarraf_security_audit_${new Date().toISOString().slice(0, 10)}`, columns, logs, language);
+    }
+  };
+
+  const handleExportExcel = () => {
+    if (activeTab === 'raw_events') {
+      const columns: ExportColumn<RawEventEntry>[] = [
+        { header: 'Event ID', headerAr: 'معرف الحدث', key: 'id' },
+        { header: 'Adapter', headerAr: 'البروتوكول', key: 'adapter_type' },
+        { header: 'Device', headerAr: 'الجهاز', accessor: (r) => r.device_name || r.device_number || '-' },
+        { header: 'Payload', headerAr: 'نص الرسالة', key: 'raw_payload' },
+        { header: 'Status', headerAr: 'الحالة', key: 'processing_status' },
+        { header: 'Timestamp', headerAr: 'توقيت الاستلام', key: 'server_received_at' },
+      ];
+      exportToExcelTable(
+        `sarraf_raw_events_${new Date().toISOString().slice(0, 10)}`,
+        language === 'ar' ? 'سجل رسائل SMS الواردة - صرّاف' : 'Sarraf Ops Inbound SMS Feed',
+        columns,
+        rawEvents,
+        language
+      );
+    } else {
+      const columns: ExportColumn<AuditLogEntry>[] = [
+        { header: 'Time', headerAr: 'الوقت', key: 'time' },
+        { header: 'Actor', headerAr: 'الفاعل', key: 'actor' },
+        { header: 'Action', headerAr: 'الإجراء', key: 'action' },
+        { header: 'Resource', headerAr: 'الكيان', key: 'resource' },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'IP Address', headerAr: 'عنوان IP', key: 'ip' },
+        { header: 'Details', headerAr: 'التفاصيل', key: 'details' },
+      ];
+      exportToExcelTable(
+        `sarraf_security_audit_${new Date().toISOString().slice(0, 10)}`,
+        language === 'ar' ? 'سجل التدقيق والأمان غير القابل للتعديل' : 'Sarraf Ops Immutable Audit Trail',
+        columns,
+        logs,
+        language
+      );
+    }
+  };
+
   return (
     <div className="pt-16 pb-28 max-w-5xl mx-auto px-margin-mobile flex flex-col gap-space-md">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-space-sm border-b border-outline-variant">
@@ -98,6 +161,24 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
           </p>
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={handleExportExcel}
+            title={language === 'ar' ? 'تصدير التبويب الحالي إلى Excel' : 'Export current tab to Excel'}
+            className="px-3.5 py-1.5 rounded-lg border border-emerald-600/30 bg-emerald-600/10 hover:bg-emerald-600/20 text-label-md font-bold text-emerald-700 dark:text-emerald-300 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">table_view</span>
+            <span>{language === 'ar' ? 'تصدير Excel' : 'Excel'}</span>
+          </button>
+
+          <button
+            onClick={handleExportCsv}
+            title={language === 'ar' ? 'تصدير التبويب الحالي إلى CSV' : 'Export current tab to CSV'}
+            className="px-3.5 py-1.5 rounded-lg border border-outline-variant bg-surface-container-low hover:bg-surface-container text-label-md font-bold text-on-surface transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">download</span>
+            <span>{language === 'ar' ? 'تصدير CSV' : 'CSV'}</span>
+          </button>
+
           <button
             onClick={fetchAllData}
             disabled={loading}

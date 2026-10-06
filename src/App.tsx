@@ -21,6 +21,7 @@ import { ReviewModal } from './components/ReviewModal';
 import { OnboardingGuideModal } from './components/OnboardingGuideModal';
 import { PairingModal } from './components/PairingModal';
 import { AddSourceModal } from './components/AddSourceModal';
+import { AnalyticsView } from './components/AnalyticsView';
 import { AuthView } from './components/AuthView';
 import { ViewLoadingSkeleton } from './components/ViewLoadingSkeleton';
 import { apiFetch } from './api';
@@ -581,6 +582,16 @@ export default function App() {
             onOpenReview={(tx) => setReviewingTransaction(tx)}
             onConfirmTransaction={(tx) => handleApproveTransaction(tx)}
             language={language}
+          />
+        )}
+
+        {currentTab === 'analytics' && (
+          <AnalyticsView
+            transactions={transactions}
+            devices={devices}
+            rails={rails}
+            language={language}
+            showToast={showToast}
           />
         )}
 

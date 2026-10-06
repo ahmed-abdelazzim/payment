@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Transaction } from '../types';
+import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUtils';
 
 interface LedgerViewProps {
   transactions: Transaction[];
@@ -58,6 +59,66 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
       return true;
     });
   }, [transactions, statusFilter, providerFilter, searchQuery]);
+
+  const handleExportCsv = () => {
+    const columns: ExportColumn<Transaction>[] = [
+      { header: 'TRX ID', headerAr: 'رقم العملية', key: 'trxId' },
+      { header: 'Provider', headerAr: 'مزود الدفع', key: 'providerLabel' },
+      { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'amount' },
+      { header: 'Sender Name', headerAr: 'اسم الراسل', key: 'senderName' },
+      { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'senderPhone' },
+      {
+        header: 'Status',
+        headerAr: 'الحالة',
+        accessor: (t) =>
+          t.status === 'confirmed' ? 'مؤكدة' : t.status === 'review_required' ? 'قيد المراجعة' : 'فاشلة',
+      },
+      {
+        header: 'Balance After',
+        headerAr: 'الرصيد بعد العملية',
+        accessor: (t) => (t.balanceAfter !== undefined && t.balanceAfter !== null ? t.balanceAfter : '-'),
+      },
+      {
+        header: 'Date & Time',
+        headerAr: 'التاريخ والوقت',
+        accessor: (t) => t.timestamp,
+      },
+    ];
+    exportToCsv(`sarraf_ledger_${new Date().toISOString().slice(0, 10)}`, columns, filteredList, language);
+  };
+
+  const handleExportExcel = () => {
+    const columns: ExportColumn<Transaction>[] = [
+      { header: 'TRX ID', headerAr: 'رقم العملية', key: 'trxId' },
+      { header: 'Provider', headerAr: 'مزود الدفع', key: 'providerLabel' },
+      { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'amount' },
+      { header: 'Sender Name', headerAr: 'اسم الراسل', key: 'senderName' },
+      { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'senderPhone' },
+      {
+        header: 'Status',
+        headerAr: 'الحالة',
+        accessor: (t) =>
+          t.status === 'confirmed' ? 'مؤكدة' : t.status === 'review_required' ? 'قيد المراجعة' : 'فاشلة',
+      },
+      {
+        header: 'Balance After',
+        headerAr: 'الرصيد بعد العملية',
+        accessor: (t) => (t.balanceAfter !== undefined && t.balanceAfter !== null ? t.balanceAfter : '-'),
+      },
+      {
+        header: 'Date & Time',
+        headerAr: 'التاريخ والوقت',
+        accessor: (t) => t.timestamp,
+      },
+    ];
+    exportToExcelTable(
+      `sarraf_ledger_${new Date().toISOString().slice(0, 10)}`,
+      language === 'ar' ? 'سجل عمليات صرّاف' : 'Sarraf Ops Transaction Ledger',
+      columns,
+      filteredList,
+      language
+    );
+  };
 
   // Active detail transaction (default to selected or first confirmed)
   const activeDetailTx = selectedTransaction || transactions[0];
@@ -194,10 +255,30 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
           </button>
         </div>
 
-        {/* Provider Dropdown Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-label-xs text-on-surface-variant font-medium hidden sm:inline">
-            {language === 'ar' ? 'تصفية المزود:' : 'Provider:'}
+        {/* Actions: Export buttons & Provider Selector */}
+        <div className="flex items-center flex-wrap gap-2">
+          {/* Export Excel */}
+          <button
+            onClick={handleExportExcel}
+            title={language === 'ar' ? 'تصدير السجل كملف Excel' : 'Export ledger as Excel'}
+            className="flex items-center gap-1 h-9 px-2.5 rounded-xl bg-emerald-600/10 border border-emerald-600/30 text-emerald-700 dark:text-emerald-300 text-label-xs font-bold hover:bg-emerald-600/20 active:scale-95 transition-all cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">table_view</span>
+            <span>Excel</span>
+          </button>
+
+          {/* Export CSV */}
+          <button
+            onClick={handleExportCsv}
+            title={language === 'ar' ? 'تصدير السجل كملف CSV' : 'Export ledger as CSV'}
+            className="flex items-center gap-1 h-9 px-2.5 rounded-xl bg-surface-container-low border border-outline-variant text-on-surface text-label-xs font-bold hover:bg-surface-container active:scale-95 transition-all cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">download</span>
+            <span>CSV</span>
+          </button>
+
+          <span className="text-label-xs text-on-surface-variant font-medium hidden sm:inline ms-1">
+            {language === 'ar' ? 'المزود:' : 'Provider:'}
           </span>
           <select
             value={providerFilter}

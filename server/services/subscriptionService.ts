@@ -49,6 +49,25 @@ function normalizeTransferReference(value?: string | null): string | null {
   return normalized || null;
 }
 
+export function normalizeEgyptianPhone(value?: string | null): string | null {
+  if (!value) return null;
+  let digits = value.replace(/[^0-9]/g, '');
+  if (digits.startsWith('0020')) digits = digits.slice(4);
+  else if (digits.startsWith('20') && digits.length === 12) digits = digits.slice(2);
+  if (digits.length === 10 && (digits.startsWith('10') || digits.startsWith('11') || digits.startsWith('12') || digits.startsWith('15'))) {
+    digits = '0' + digits;
+  }
+  return digits.length === 11 && digits.startsWith('01') ? digits : null;
+}
+
+export function extractEgyptianPhone(value?: string | null): string | null {
+  if (!value) return null;
+  const direct = normalizeEgyptianPhone(value);
+  if (direct) return direct;
+  const match = value.match(/(?:\+?20|0020)?(01[0125][0-9]{8})/);
+  return match ? normalizeEgyptianPhone(match[1]) : null;
+}
+
 function getOfficialPlan(planId: string): (typeof OFFICIAL_SUBSCRIPTION_PLANS)[OfficialPlanId] | null {
   return Object.prototype.hasOwnProperty.call(OFFICIAL_SUBSCRIPTION_PLANS, planId)
     ? OFFICIAL_SUBSCRIPTION_PLANS[planId as OfficialPlanId]
@@ -89,6 +108,7 @@ export interface SubscriptionOrder {
   status: 'pending_payment' | 'payment_reported' | 'in_review' | 'confirmed' | 'rejected' | 'expired';
   reported_transfer_ref?: string;
   reported_sender_info?: string;
+  reported_sender_phone?: string;
   reported_transfer_time?: string;
   reported_notes?: string;
   reported_at?: string;
@@ -301,6 +321,7 @@ export class SubscriptionService {
 
     const ref = params.reportedTransferRef?.trim() || null;
     const sender = params.reportedSenderInfo?.trim() || null;
+    const senderPhone = params.reportedSenderPhone?.trim() || extractEgyptianPhone(sender) || null;
     const time = params.reportedTransferTime?.trim() || new Date().toISOString();
     const notes = params.reportedNotes?.trim() || null;
     const orderHasExpired = new Date(order.expires_at).getTime() <= Date.now();
@@ -318,13 +339,14 @@ export class SubscriptionService {
       SET status = ?,
           reported_transfer_ref = ?,
           reported_sender_info = ?,
+          reported_sender_phone = ?,
           reported_transfer_time = ?,
           reported_notes = ?,
           review_notes = COALESCE(?, review_notes),
           reported_at = datetime('now'),
           updated_at = datetime('now')
       WHERE id = ?
-    `).run(nextStatus, ref, sender, time, notes, reviewNote, params.orderId);
+    `).run(nextStatus, ref, sender, senderPhone, time, notes, reviewNote, params.orderId);
 
     if (nextStatus === 'in_review') {
       const updatedOrder = this.getOrderById(params.orderId) as SubscriptionOrder;
@@ -332,7 +354,7 @@ export class SubscriptionService {
     }
 
     // Automatic activation is allowed only when the platform has a separate,
-    // trusted inbound record with the exact same unique transfer reference.
+    // trusted inbound record with the matching transfer reference or sender phone.
     const matchResult = this.attemptMatchOrder(params.orderId);
 
     const updatedOrder = this.getOrderById(params.orderId) as SubscriptionOrder;
@@ -342,7 +364,7 @@ export class SubscriptionService {
   /**
    * Attempts matching a reported order with unassigned verified transactions on the platform's operational account.
    */
-  static attemptMatchOrder(orderId: string): { matched: boolean; transactionId?: string } {
+  static attemptMatchOrder(orderId: string): { matched: boolean; transactionId?: string; underpaid?: boolean } {
     const db = getDatabase();
     const order = this.getOrderById(orderId) as SubscriptionOrder;
     if (!order || order.status !== 'payment_reported') {
@@ -350,55 +372,101 @@ export class SubscriptionService {
     }
 
     const reference = normalizeTransferReference(order.reported_transfer_ref);
-    if (!reference) {
-      this.markOrderForReview(orderId, 'A unique platform transfer reference is required before automatic subscription activation.');
+    const subscriberPhone = normalizeEgyptianPhone(order.reported_sender_phone)
+      || extractEgyptianPhone(order.reported_sender_info)
+      || extractEgyptianPhone(order.reported_transfer_ref);
+
+    if (!reference && !subscriberPhone) {
+      this.markOrderForReview(orderId, 'يرجى إدخال رقم الهاتف المحول منه أو رقم مرجع التحويل للمطابقة والتفعيل التلقائي.');
       return { matched: false };
     }
 
     const settings = this.getPlatformSettings();
 
-    // A matching amount, sender name, or phone is only supporting evidence. The
-    // platform must have one independently captured, signed transaction on its
-    // own registered receiving source with the exact transfer reference.
+    // Query candidate transactions on the platform operational receiver OR on payment sources matching the platform instapay number OR on admin workspaces
     const candidates = db.prepare(`
       SELECT t.id, t.external_trx_id, t.amount_minor, t.sender_name, t.sender_phone, t.financial_event_at,
-             t.payment_source_id, t.reconciliation_state, t.provenance_confidence, t.signature
+             t.payment_source_id, t.reconciliation_state, t.provenance_confidence, t.signature, t.status
       FROM transactions t
-      WHERE t.organization_id = ?
-        AND t.payment_source_id = ?
-        AND t.status = 'confirmed'
+      WHERE (
+        (t.organization_id = ? AND t.payment_source_id = ?)
+        OR t.payment_source_id IN (
+          SELECT ps.id FROM payment_sources ps WHERE ps.wallet_number = ?
+        )
+        OR t.organization_id IN (
+          SELECT om.organization_id FROM organization_members om JOIN users u ON om.user_id = u.id WHERE u.is_platform_admin = 1
+        )
+      )
+        AND (t.status = 'confirmed' OR t.status = 'review_required')
         AND t.reconciliation_state = 'consistent'
         AND t.provenance_confidence >= 1
         AND t.signature IS NOT NULL
         AND trim(t.signature) != ''
         AND t.signature != 'webhook_token_verified'
-        AND t.amount_minor = ?
-        AND lower(trim(t.external_trx_id)) = ?
         AND t.id NOT IN (
           SELECT matched_transaction_id FROM subscription_orders WHERE matched_transaction_id IS NOT NULL AND status = 'confirmed'
         )
-      ORDER BY t.financial_event_at ASC
-    `).all(settings.platform_org_id, settings.platform_source_id, order.price_minor, reference) as any[];
+      ORDER BY t.financial_event_at DESC
+    `).all(settings.platform_org_id, settings.platform_source_id, settings.instapay_number) as any[];
 
-    if (candidates.length !== 1) {
+    const matchingCandidates = candidates.filter((c) => {
+      const txRef = normalizeTransferReference(c.external_trx_id);
+      const isRefMatch = Boolean(reference && txRef && reference === txRef);
+
+      const txPhone = normalizeEgyptianPhone(c.sender_phone);
+      const isPhoneMatch = Boolean(subscriberPhone && txPhone && subscriberPhone === txPhone);
+
+      return isRefMatch || isPhoneMatch;
+    });
+
+    if (matchingCandidates.length === 0) {
       this.markOrderForReview(
         orderId,
-        candidates.length === 0
-          ? 'No independently captured platform transaction with this exact trusted reference was found.'
-          : 'More than one platform transaction has the same trusted reference and requires platform-owner review.'
+        'لم يتم العثور على تحويلة واردة مطابقة لرقم الهاتف أو المرجع حتى الآن. سيتم التفعيل تلقائياً فور وصول إشعار الاستلام على هاتف المنصة.'
       );
       return { matched: false };
     }
 
-    const matchedCandidate = candidates[0];
-    this.activateSubscriptionFromOrder({
-      orderId,
-      transactionId: matchedCandidate.id,
-      matchedExternalTrxId: matchedCandidate.external_trx_id,
-      approvalType: 'automatic',
-    });
+    if (matchingCandidates.length > 1) {
+      this.markOrderForReview(
+        orderId,
+        'تم العثور على أكثر من تحويلة واردة مطابقة لنفس البيانات. تم تعليق الطلب للمراجعة والتدقيق اليدوي.'
+      );
+      return { matched: false };
+    }
 
-    return { matched: true, transactionId: matchedCandidate.id };
+    const matched = matchingCandidates[0];
+
+    // Check amount:
+    // Case 1: Transferred amount is EQUAL TO OR GREATER THAN plan price -> Auto Activate!
+    if (matched.amount_minor >= order.price_minor) {
+      this.activateSubscriptionFromOrder({
+        orderId,
+        transactionId: matched.id,
+        matchedExternalTrxId: matched.external_trx_id,
+        matchedSenderPhone: matched.sender_phone,
+        approvalType: 'automatic',
+        reviewNotes: `تم المطابقة والتفعيل التلقائي بنجاح. هاتف المحول: ${matched.sender_phone || subscriberPhone || 'مطابق'}. المبلغ المستلم: ${fromMinor(matched.amount_minor)} ج.م (قيمة الباقة: ${fromMinor(order.price_minor)} ج.م).`,
+      });
+      return { matched: true, transactionId: matched.id };
+    }
+
+    // Case 2: Transferred amount is LESS THAN plan price -> Underpaid!
+    // Keep pending / in_review for platform owner manual inspection!
+    db.prepare(`
+      UPDATE subscription_orders
+      SET status = 'in_review',
+          matched_transaction_id = ?,
+          review_notes = ?,
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      matched.id,
+      `تنبيه مالي: تم رصد تحويلة واردة من رقم هاتف (${matched.sender_phone || subscriberPhone}) ولكن المبلغ المستلم (${fromMinor(matched.amount_minor)} ج.م) أقل من قيمة الباقة المطلوبة (${fromMinor(order.price_minor)} ج.م). الطلب معلق للمراجعة اليدوية من قبل صاحب المنصة.`,
+      orderId
+    );
+
+    return { matched: false, transactionId: matched.id, underpaid: true };
   }
 
   /**
@@ -411,57 +479,101 @@ export class SubscriptionService {
     externalTrxId: string;
     senderPhone?: string;
     senderName?: string;
-  }): { autoActivatedOrderId?: string } {
+    organizationId?: string;
+    paymentSourceId?: string;
+  }): { autoActivatedOrderId?: string; inReviewOrderId?: string } {
     const db = getDatabase();
     const settings = this.getPlatformSettings();
+
+    // Verify this transaction belongs to the platform operational receiver or platform admin's workspace
     const incoming = db.prepare(`
-      SELECT t.id, t.external_trx_id, t.amount_minor
+      SELECT t.id, t.external_trx_id, t.amount_minor, t.sender_phone, t.status, t.reconciliation_state,
+             t.provenance_confidence, t.signature, t.organization_id, t.payment_source_id
       FROM transactions t
       WHERE t.id = ?
-        AND t.organization_id = ?
-        AND t.payment_source_id = ?
-        AND t.status = 'confirmed'
+        AND (
+          (t.organization_id = ? AND t.payment_source_id = ?)
+          OR t.payment_source_id IN (
+            SELECT ps.id FROM payment_sources ps WHERE ps.wallet_number = ?
+          )
+          OR t.organization_id IN (
+            SELECT om.organization_id FROM organization_members om JOIN users u ON om.user_id = u.id WHERE u.is_platform_admin = 1
+          )
+        )
+        AND (t.status = 'confirmed' OR t.status = 'review_required')
         AND t.reconciliation_state = 'consistent'
         AND t.provenance_confidence >= 1
         AND t.signature IS NOT NULL
         AND trim(t.signature) != ''
         AND t.signature != 'webhook_token_verified'
-    `).get(tx.id, settings.platform_org_id, settings.platform_source_id) as any;
+    `).get(tx.id, settings.platform_org_id, settings.platform_source_id, settings.instapay_number) as any;
 
-    const reference = normalizeTransferReference(incoming?.external_trx_id);
-    if (!incoming || !reference || !sameMinor(incoming.amount_minor, tx.amountMinor)) {
+    if (!incoming) {
       return {};
     }
 
-    // An inbound transaction cannot activate an order until the merchant has
-    // reported its exact reference. Sender details and equal amounts are never
-    // sufficient to choose an order.
+    const incomingRef = normalizeTransferReference(incoming.external_trx_id);
+    const incomingPhone = normalizeEgyptianPhone(incoming.sender_phone);
+
+    // Look for pending or reported subscription orders that are awaiting matching
     const candidateOrders = db.prepare(`
       SELECT *, ${PRICE_EGP_COLUMN} FROM subscription_orders
-      WHERE status = 'payment_reported'
-        AND price_minor = ?
+      WHERE status IN ('payment_reported', 'pending_payment', 'in_review')
         AND matched_transaction_id IS NULL
-        AND lower(trim(reported_transfer_ref)) = ?
       ORDER BY created_at ASC
-    `).all(incoming.amount_minor, reference) as unknown as SubscriptionOrder[];
+    `).all() as unknown as SubscriptionOrder[];
 
-    if (candidateOrders.length !== 1) {
-      if (candidateOrders.length > 1) {
-        for (const order of candidateOrders) {
-          this.markOrderForReview(order.id, 'Multiple subscription orders claim the same platform transfer reference.');
+    const matchingOrders = candidateOrders.filter((order) => {
+      const orderRef = normalizeTransferReference(order.reported_transfer_ref);
+      const isRefMatch = Boolean(incomingRef && orderRef && incomingRef === orderRef);
+
+      const orderPhone = normalizeEgyptianPhone(order.reported_sender_phone)
+        || extractEgyptianPhone(order.reported_sender_info)
+        || extractEgyptianPhone(order.reported_transfer_ref);
+      const isPhoneMatch = Boolean(incomingPhone && orderPhone && incomingPhone === orderPhone);
+
+      return isRefMatch || isPhoneMatch;
+    });
+
+    if (matchingOrders.length !== 1) {
+      if (matchingOrders.length > 1) {
+        for (const order of matchingOrders) {
+          this.markOrderForReview(order.id, 'تم العثور على أكثر من طلب اشتراك يطابق نفس رقم هاتف أو مرجع التحويل.');
         }
       }
       return {};
     }
 
-    const matchedOrder = candidateOrders[0];
-    this.activateSubscriptionFromOrder({
-      orderId: matchedOrder.id,
-      transactionId: incoming.id,
-      matchedExternalTrxId: incoming.external_trx_id,
-      approvalType: 'automatic',
-    });
-    return { autoActivatedOrderId: matchedOrder.id };
+    const matchedOrder = matchingOrders[0];
+
+    // Check amount
+    if (incoming.amount_minor >= matchedOrder.price_minor) {
+      this.activateSubscriptionFromOrder({
+        orderId: matchedOrder.id,
+        transactionId: incoming.id,
+        matchedExternalTrxId: incoming.external_trx_id,
+        matchedSenderPhone: incoming.sender_phone,
+        approvalType: 'automatic',
+        reviewNotes: `تم الالتقاط والمطابقة والتفعيل التلقائي فوراً عند وصول إشعار التحويل. هاتف المحول: ${incoming.sender_phone || 'مطابق'}. المبلغ المستلم: ${fromMinor(incoming.amount_minor)} ج.م (قيمة الباقة: ${fromMinor(matchedOrder.price_minor)} ج.م).`,
+      });
+      return { autoActivatedOrderId: matchedOrder.id };
+    }
+
+    // Underpaid: amount is less than plan price!
+    db.prepare(`
+      UPDATE subscription_orders
+      SET status = 'in_review',
+          matched_transaction_id = ?,
+          review_notes = ?,
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      incoming.id,
+      `تنبيه مالي: تم رصد وصول تحويلة من رقم هاتف (${incoming.sender_phone}) ولكن المبلغ المستلم (${fromMinor(incoming.amount_minor)} ج.م) أقل من قيمة الباقة المطلوبة (${fromMinor(matchedOrder.price_minor)} ج.م). الطلب معلق للمراجعة اليدوية من قبل صاحب المنصة.`,
+      matchedOrder.id
+    );
+
+    return { inReviewOrderId: matchedOrder.id };
   }
 
   private static markOrderForReview(orderId: string, reason: string): void {
@@ -477,24 +589,30 @@ export class SubscriptionService {
     const settings = this.getPlatformSettings();
     return db.prepare(`
       SELECT t.id, t.external_trx_id, t.amount_minor, t.status, t.reconciliation_state,
-             t.provenance_confidence, t.signature, t.organization_id, t.payment_source_id
+             t.provenance_confidence, t.signature, t.organization_id, t.payment_source_id, t.sender_phone
       FROM transactions t
       WHERE t.id = ?
-        AND t.organization_id = ?
-        AND t.payment_source_id = ?
-    `).get(transactionId, settings.platform_org_id, settings.platform_source_id) as any | null;
+        AND (
+          (t.organization_id = ? AND t.payment_source_id = ?)
+          OR t.payment_source_id IN (
+            SELECT ps.id FROM payment_sources ps WHERE ps.wallet_number = ?
+          )
+          OR t.organization_id IN (
+            SELECT om.organization_id FROM organization_members om JOIN users u ON om.user_id = u.id WHERE u.is_platform_admin = 1
+          )
+        )
+    `).get(transactionId, settings.platform_org_id, settings.platform_source_id, settings.instapay_number) as any | null;
   }
 
   private static isTrustedPlatformTransaction(transaction: any): boolean {
     return Boolean(
       transaction &&
-      transaction.status === 'confirmed' &&
+      (transaction.status === 'confirmed' || transaction.status === 'review_required') &&
       transaction.reconciliation_state === 'consistent' &&
       Number(transaction.provenance_confidence) >= 1 &&
       typeof transaction.signature === 'string' &&
       transaction.signature.trim() !== '' &&
-      transaction.signature !== 'webhook_token_verified' &&
-      normalizeTransferReference(transaction.external_trx_id)
+      transaction.signature !== 'webhook_token_verified'
     );
   }
 
@@ -506,6 +624,7 @@ export class SubscriptionService {
     orderId: string;
     transactionId: string | null;
     matchedExternalTrxId?: string;
+    matchedSenderPhone?: string;
     approvalType: 'automatic' | 'manual';
     approvedByUserId?: string;
     reviewNotes?: string;
@@ -548,14 +667,21 @@ export class SubscriptionService {
         }
 
         const platformTransaction = this.getPlatformTransaction(db, params.transactionId);
-        if (!platformTransaction || !sameMinor(platformTransaction.amount_minor, order.price_minor)) {
+        if (!platformTransaction || Number(platformTransaction.amount_minor) < Number(order.price_minor)) {
           throw new Error('INVALID_PLATFORM_TRANSACTION');
         }
 
         if (params.approvalType === 'automatic') {
           const externalReference = normalizeTransferReference(params.matchedExternalTrxId);
           const transactionReference = normalizeTransferReference(platformTransaction.external_trx_id);
-          if (!this.isTrustedPlatformTransaction(platformTransaction) || !externalReference || externalReference !== transactionReference) {
+          const phoneMatch = Boolean(
+            params.matchedSenderPhone &&
+            platformTransaction.sender_phone &&
+            normalizeEgyptianPhone(params.matchedSenderPhone) === normalizeEgyptianPhone(platformTransaction.sender_phone)
+          );
+          const refMatch = Boolean(externalReference && externalReference === transactionReference);
+
+          if (!this.isTrustedPlatformTransaction(platformTransaction) || (!externalReference && !params.matchedSenderPhone) || (!refMatch && !phoneMatch)) {
             throw new Error('AUTO_ACTIVATION_REQUIRES_TRUSTED_PLATFORM_TRANSACTION');
           }
         }
@@ -673,6 +799,15 @@ export class SubscriptionService {
           deviceLimit: order.device_limit,
         },
       });
+
+      // 5. Update transaction status to confirmed if it was held in review_required
+      if (params.transactionId) {
+        db.prepare(`
+          UPDATE transactions
+          SET status = 'confirmed', reconciliation_state = 'consistent'
+          WHERE id = ? AND status = 'review_required'
+        `).run(params.transactionId);
+      }
 
       db.exec('COMMIT;');
     } catch (err: any) {

@@ -155,6 +155,23 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
 
             <button
               onClick={() => {
+                onSelectTab('analytics');
+                onClose();
+              }}
+              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
+                currentTab === 'analytics'
+                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
+                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
+              }`}
+            >
+              <span className="material-symbols-outlined text-xl text-primary">analytics</span>
+              <span className="text-body-md font-medium">
+                {language === 'ar' ? 'التحليلات والربط (Google Sheets)' : 'Analytics & Google Sheets'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
                 onSelectTab('rails');
                 onClose();
               }}

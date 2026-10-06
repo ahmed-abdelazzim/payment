@@ -77,6 +77,21 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
           {language === 'ar' ? 'المسارات' : 'Rails'}
         </span>
       </button>
+
+      {/* Tab 5: Analytics */}
+      <button
+        onClick={() => onSelectTab('analytics')}
+        className={`flex flex-col items-center justify-center py-1.5 px-3.5 rounded-2xl active:scale-90 transition-all cursor-pointer ${
+          currentTab === 'analytics'
+            ? 'bg-primary/10 text-primary font-bold shadow-xs border border-primary/20'
+            : 'text-on-surface-variant hover:bg-surface-container'
+        }`}
+      >
+        <span className="material-symbols-outlined text-xl">analytics</span>
+        <span className="text-label-xs font-semibold mt-0.5">
+          {language === 'ar' ? 'التحليلات' : 'Analytics'}
+        </span>
+      </button>
     </nav>
   );
 };

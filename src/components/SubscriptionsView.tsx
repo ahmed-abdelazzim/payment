@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { CurrentSubscription, SubscriptionPlan, SubscriptionOrder, SubscriptionReceipt } from '../types';
 import { ReceiptModal } from './ReceiptModal';
 import { apiFetch } from '../api';
+import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUtils';
 
 interface SubscriptionsViewProps {
   language: 'en' | 'ar';
@@ -29,6 +30,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [isSubmittingReport, setIsSubmittingReport] = useState<boolean>(false);
 
   // Transfer Proof Form
+  const [senderPhone, setSenderPhone] = useState<string>('');
   const [transferRef, setTransferRef] = useState<string>('');
   const [senderInfo, setSenderInfo] = useState<string>('');
   const [transferTime, setTransferTime] = useState<string>(new Date().toISOString().slice(0, 16));
@@ -124,11 +126,11 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     e.preventDefault();
     if (!activeOrder) return;
 
-    if (!transferRef && !senderInfo) {
+    if (!senderPhone && !transferRef && !senderInfo) {
       showToast(
         language === 'ar'
-          ? 'يرجى إدخال رقم مرجع التحويل أو اسم/رقم هاتف المرسل'
-          : 'Please provide either transfer reference or sender details'
+          ? 'يرجى إدخال رقم الهاتف المحول منه أو رقم مرجع التحويل'
+          : 'Please provide the sender phone number or transfer reference'
       );
       return;
     }
@@ -141,6 +143,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          reportedSenderPhone: senderPhone.trim(),
           reportedTransferRef: transferRef.trim(),
           reportedSenderInfo: senderInfo.trim(),
           reportedTransferTime: transferTime,
@@ -153,6 +156,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         setIsReportModalOpen(false);
         setIsCheckoutOpen(false);
         setActiveOrder(null);
+        setSenderPhone('');
         setTransferRef('');
         setSenderInfo('');
         setTransferNotes('');
@@ -473,13 +477,70 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 : 'Track payment matching status with InstaPay and download verified receipts'}
             </p>
           </div>
-          <button
-            onClick={loadSubscriptionData}
-            className="p-2 rounded-lg text-on-surface-variant hover:bg-surface-container transition-colors"
-            title="Refresh"
-          >
-            <span className="material-symbols-outlined text-xl">refresh</span>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => {
+                const columns: ExportColumn<SubscriptionOrder>[] = [
+                  { header: 'Order #', headerAr: 'رقم الطلب', key: 'order_number' },
+                  { header: 'Plan', headerAr: 'الباقة', accessor: (o) => (language === 'ar' ? o.plan_name_ar : o.plan_name_en) },
+                  { header: 'Billing Cycle', headerAr: 'دورة الدفع', accessor: (o) => (o.billing_cycle === 'annual' ? 'سنوي' : 'شهري') },
+                  { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'price_egp' },
+                  { header: 'Status', headerAr: 'الحالة', key: 'status' },
+                  { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'reported_sender_phone' },
+                  { header: 'Transfer Ref', headerAr: 'مرجع التحويل', key: 'reported_transfer_ref' },
+                  { header: 'Created Date', headerAr: 'تاريخ الإنشاء', key: 'created_at' },
+                  { header: 'Confirmed Date', headerAr: 'تاريخ التأكيد', key: 'confirmed_at' },
+                ];
+                exportToExcelTable(
+                  `sarraf_subscription_invoices_${new Date().toISOString().slice(0, 10)}`,
+                  language === 'ar' ? 'سجل فواتير واشتراكات صرّاف' : 'Sarraf Ops Invoices & Subscriptions',
+                  columns,
+                  orders,
+                  language
+                );
+              }}
+              title={language === 'ar' ? 'تصدير سجل الفواتير كـ Excel' : 'Export invoices as Excel'}
+              className="px-3 py-1.5 rounded-lg border border-emerald-600/30 bg-emerald-600/10 hover:bg-emerald-600/20 text-label-xs font-bold text-emerald-700 dark:text-emerald-300 transition-all flex items-center gap-1 cursor-pointer shadow-xs"
+            >
+              <span className="material-symbols-outlined text-base">table_view</span>
+              <span>Excel</span>
+            </button>
+
+            <button
+              onClick={() => {
+                const columns: ExportColumn<SubscriptionOrder>[] = [
+                  { header: 'Order #', headerAr: 'رقم الطلب', key: 'order_number' },
+                  { header: 'Plan', headerAr: 'الباقة', accessor: (o) => (language === 'ar' ? o.plan_name_ar : o.plan_name_en) },
+                  { header: 'Billing Cycle', headerAr: 'دورة الدفع', accessor: (o) => (o.billing_cycle === 'annual' ? 'سنوي' : 'شهري') },
+                  { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'price_egp' },
+                  { header: 'Status', headerAr: 'الحالة', key: 'status' },
+                  { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'reported_sender_phone' },
+                  { header: 'Transfer Ref', headerAr: 'مرجع التحويل', key: 'reported_transfer_ref' },
+                  { header: 'Created Date', headerAr: 'تاريخ الإنشاء', key: 'created_at' },
+                  { header: 'Confirmed Date', headerAr: 'تاريخ التأكيد', key: 'confirmed_at' },
+                ];
+                exportToCsv(
+                  `sarraf_subscription_invoices_${new Date().toISOString().slice(0, 10)}`,
+                  columns,
+                  orders,
+                  language
+                );
+              }}
+              title={language === 'ar' ? 'تصدير سجل الفواتير كـ CSV' : 'Export invoices as CSV'}
+              className="px-3 py-1.5 rounded-lg border border-outline-variant bg-surface-container-low hover:bg-surface-container text-label-xs font-bold text-on-surface transition-all flex items-center gap-1 cursor-pointer shadow-xs"
+            >
+              <span className="material-symbols-outlined text-base">download</span>
+              <span>CSV</span>
+            </button>
+
+            <button
+              onClick={loadSubscriptionData}
+              className="p-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container transition-colors"
+              title="Refresh"
+            >
+              <span className="material-symbols-outlined text-xl">refresh</span>
+            </button>
+          </div>
         </div>
 
         {orders.length === 0 ? (
@@ -722,20 +783,51 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
             {/* Form */}
             <form onSubmit={handleSubmitReport}>
               <div className="p-6 space-y-4">
-                {/* Important Trust Notice */}
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-body-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
-                  <span className="material-symbols-outlined text-base text-amber-600 shrink-0 mt-0.5">verified_user</span>
-                  <span>
+                {/* Highlighted Notice for Automated Activation */}
+                <div className="p-3.5 rounded-xl bg-primary/10 border border-primary/20 text-body-xs text-primary flex items-start gap-2.5">
+                  <span className="material-symbols-outlined text-lg text-primary shrink-0 mt-0.5">bolt</span>
+                  <div>
+                    <span className="font-bold block mb-0.5">
+                      {language === 'ar' ? 'نظام المطابقة والتفعيل اللحظي التلقائي ⚡' : 'Instant Automated Activation ⚡'}
+                    </span>
+                    <span className="text-on-surface-variant">
+                      {language === 'ar'
+                        ? 'بمجرد تسجيل رقم هاتفك الذي حولت منه، يقوم النظام بمطابقة إشعار إنستاباي والتأكد من استلام المبلغ وتفعيل الباقة أوتوماتيكياً فوراً!'
+                        : 'Once you provide your transferring phone number, the system automatically matches the inbound InstaPay notification and activates your plan immediately!'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Primary Field: Sender Phone Number */}
+                <div className="p-3.5 rounded-xl bg-surface-container-low border border-primary/30 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-label-sm font-extrabold text-on-surface flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-primary text-base">phone_iphone</span>
+                      <span>{language === 'ar' ? 'رقم الهاتف المحول منه (إنستاباي / محفظة):' : 'Transferring Phone Number (InstaPay / Wallet):'}</span>
+                    </label>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-primary/15 text-primary">
+                      {language === 'ar' ? 'أساسي للتفعيل الفوري' : 'Key for Instant Activation'}
+                    </span>
+                  </div>
+                  <input
+                    type="tel"
+                    dir="ltr"
+                    value={senderPhone}
+                    onChange={(e) => setSenderPhone(e.target.value)}
+                    placeholder="01012345678 / 011... / 012... / 015..."
+                    className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface font-mono text-body-md font-bold focus:outline-none focus:border-primary"
+                  />
+                  <span className="text-label-xs text-on-surface-variant block">
                     {language === 'ar'
-                      ? 'النظام يربط بياناتك آلياً برسالة التحويل المستلمة فعلياً على حساب صاحب المنصة. لن يتم التفعيل حتى وصول الرسالة وتطابقها برمجياً.'
-                      : 'The system matches your claim with the real payment message captured on the platform receiver. Plan activates upon cryptographic verification.'}
+                      ? 'رقم الموبايل الذي قمت بالتحويل منه عبر إنستاباي، ليتم مطابقة التحويل أوتوماتيكياً وتفعيل باقتك فوراً'
+                      : 'The mobile number you used to send the payment in InstaPay, used for instant automatic matching'}
                   </span>
                 </div>
 
-                {/* Transfer Reference / TRX ID */}
+                {/* Secondary Field: Transfer Reference / TRX ID */}
                 <div>
-                  <label className="block text-label-sm font-bold text-on-surface mb-1">
-                    {language === 'ar' ? 'رقم مرجع التحويل (إنستاباي / البنك):' : 'Transfer Reference # / InstaPay TRX ID:'}
+                  <label className="block text-label-sm font-semibold text-on-surface mb-1">
+                    {language === 'ar' ? 'رقم مرجع التحويل (إنستاباي / البنك - اختياري):' : 'Transfer Reference # / InstaPay TRX ID (Optional):'}
                   </label>
                   <input
                     type="text"
@@ -745,20 +837,20 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                     className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface font-mono text-body-sm focus:outline-none focus:border-primary"
                   />
                   <span className="text-label-xs text-on-surface-variant mt-1 block">
-                    {language === 'ar' ? 'الرقم المرجعي الموضح في شاشة نجاح التحويل بتطبيق إنستاباي' : 'Reference code displayed on InstaPay completion receipt'}
+                    {language === 'ar' ? 'الرقم المرجعي الموضح في شاشة نجاح التحويل بتطبيق إنستاباي (إن وجد)' : 'Reference code displayed on InstaPay completion receipt (if available)'}
                   </span>
                 </div>
 
-                {/* Sender Name / Phone */}
+                {/* Sender Name / Info (Optional) */}
                 <div>
-                  <label className="block text-label-sm font-bold text-on-surface mb-1">
-                    {language === 'ar' ? 'اسم أو رقم هاتف المرسل:' : 'Sender Name or Phone Number:'}
+                  <label className="block text-label-sm font-semibold text-on-surface mb-1">
+                    {language === 'ar' ? 'اسم صاحب الحساب أو تفاصيل إضافية (اختياري):' : 'Account Holder Name or Extra Info (Optional):'}
                   </label>
                   <input
                     type="text"
                     value={senderInfo}
                     onChange={(e) => setSenderInfo(e.target.value)}
-                    placeholder="010... أو اسم الحساب المحول منه"
+                    placeholder={language === 'ar' ? 'اسم المحول كما يظهر في إنستاباي' : 'Sender account name in InstaPay'}
                     className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-sm focus:outline-none focus:border-primary"
                   />
                 </div>

@@ -482,3 +482,116 @@ test('Subscription 8: Data Persistence Across Database Restarts', () => {
   const shmFile = `${testDbFile}-shm`;
   if (fs.existsSync(shmFile)) fs.unlinkSync(shmFile);
 });
+
+test('Subscription 9: Automated Phone-Based Matching and Overpayment / Underpayment Threshold Rules', () => {
+  const db = initTestDatabase();
+  setDatabase(db);
+
+  const orgId = 'org_phone_match_merchant';
+  const userId = 'usr_phone_match_merchant';
+  db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Smart Merchant', 'التاجر الذكي', 'smart-merchant')`).run(orgId);
+  db.prepare(`INSERT INTO users (id, email, password_hash, full_name) VALUES (?, 'smart@merchant.eg', 'h', 'Smart Merchant')`).run(userId);
+
+  // SCENARIO 1: Phone matches and transferred amount is GREATER than plan price (8000 EGP for 7990 EGP plan)
+  const orderAnnual = SubscriptionService.createOrder({ organizationId: orgId, userId, planId: 'plan_annual_10' });
+  assert.strictEqual(orderAnnual.price_egp, 7990.0);
+
+  // Simulate owner's terminal receiving 8,000 EGP (800,000 piastres) from customer's phone '01012345678'
+  db.prepare(`
+    INSERT INTO transactions (
+      id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider,
+      amount_minor, sender_phone, status, reconciliation_state, provenance_confidence, signature, financial_event_at
+    ) VALUES (
+      'tx_overpaid_8000', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-OVERPAID-8000', 'instapay',
+      800000, '01012345678', 'review_required', 'consistent', 1.0, 'valid_hmac_signature', datetime('now')
+    )
+  `).run();
+
+  // Customer reports payment with phone '+201012345678' (international format normalization test)
+  const reportOverpaid = SubscriptionService.reportPayment({
+    orderId: orderAnnual.id,
+    organizationId: orgId,
+    reportedSenderPhone: '+201012345678',
+  });
+
+  assert.strictEqual(reportOverpaid.matched, true, 'Transferred 8000 EGP (>= 7990 EGP) must auto-activate!');
+  assert.strictEqual(reportOverpaid.order.status, 'confirmed');
+  assert.strictEqual(reportOverpaid.order.approval_type, 'automatic');
+  const subAfterAnnual = SubscriptionService.getOrganizationSubscription(orgId);
+  assert.strictEqual(subAfterAnnual.hasSubscription, true);
+  assert.strictEqual(subAfterAnnual.deviceLimit, 10);
+
+  // SCENARIO 2: Underpayment (Customer transferred 7000 EGP for 7990 EGP plan)
+  const orgUnderpaid = 'org_underpaid_merchant';
+  const userUnderpaid = 'usr_underpaid_merchant';
+  db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Underpaid Shop', 'متجر ناقص', 'underpaid-shop')`).run(orgUnderpaid);
+  db.prepare(`INSERT INTO users (id, email, password_hash, full_name) VALUES (?, 'underpaid@shop.eg', 'h', 'Underpaid User')`).run(userUnderpaid);
+
+  const orderUnderpaid = SubscriptionService.createOrder({ organizationId: orgUnderpaid, userId: userUnderpaid, planId: 'plan_annual_10' });
+
+  // Inbound transaction on owner's phone: 7,000 EGP (700,000 piastres) from '01298765432'
+  db.prepare(`
+    INSERT INTO transactions (
+      id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider,
+      amount_minor, sender_phone, status, reconciliation_state, provenance_confidence, signature, financial_event_at
+    ) VALUES (
+      'tx_underpaid_7000', 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-UNDERPAID-7000', 'instapay',
+      700000, '01298765432', 'review_required', 'consistent', 1.0, 'valid_hmac_signature', datetime('now')
+    )
+  `).run();
+
+  const reportUnderpaid = SubscriptionService.reportPayment({
+    orderId: orderUnderpaid.id,
+    organizationId: orgUnderpaid,
+    reportedSenderPhone: '01298765432',
+  });
+
+  assert.strictEqual(reportUnderpaid.matched, false, 'Transferred 7000 EGP (< 7990 EGP) must NOT auto-activate!');
+  assert.strictEqual(reportUnderpaid.order.status, 'in_review', 'Order must be held in_review for owner manual check');
+  assert.ok(reportUnderpaid.order.review_notes?.includes('أقل من قيمة الباقة المطلوبة'), 'Review notes must document underpayment');
+  const subUnderpaid = SubscriptionService.getOrganizationSubscription(orgUnderpaid);
+  assert.strictEqual(subUnderpaid.hasSubscription, false, 'Subscription must remain inactive when underpaid');
+
+  // SCENARIO 3: Bidirectional Triggering (Customer reports first, transaction arrives on device ingest later)
+  const orgDeviceFirst = 'org_device_first_merchant';
+  const userDeviceFirst = 'usr_device_first_merchant';
+  db.prepare(`INSERT INTO organizations (id, name, name_ar, slug) VALUES (?, 'Device Ingest Shop', 'متجر الالتقاط', 'device-ingest-shop')`).run(orgDeviceFirst);
+  db.prepare(`INSERT INTO users (id, email, password_hash, full_name) VALUES (?, 'device@shop.eg', 'h', 'Device User')`).run(userDeviceFirst);
+
+  const orderMonthly5 = SubscriptionService.createOrder({ organizationId: orgDeviceFirst, userId: userDeviceFirst, planId: 'plan_monthly_5' });
+
+  // Customer reports payment FIRST
+  SubscriptionService.reportPayment({
+    orderId: orderMonthly5.id,
+    organizationId: orgDeviceFirst,
+    reportedSenderPhone: '01155443322',
+  });
+
+  // Now, the owner's phone captures the SMS and triggers handleInboundPlatformTransaction
+  const txIngestedId = 'tx_device_ingested_799';
+  db.prepare(`
+    INSERT INTO transactions (
+      id, organization_id, balance_account_id, payment_source_id, external_trx_id, provider,
+      amount_minor, sender_phone, status, reconciliation_state, provenance_confidence, signature, financial_event_at
+    ) VALUES (
+      ?, 'org_platform_ops', 'acc_platform_ops', 'src_platform_instapay', 'IPN-INGEST-799', 'instapay',
+      79900, '01155443322', 'review_required', 'consistent', 1.0, 'valid_hmac_signature', datetime('now')
+    )
+  `).run(txIngestedId);
+
+  const outcome = SubscriptionService.handleInboundPlatformTransaction({
+    id: txIngestedId,
+    amountMinor: 79900,
+    externalTrxId: 'IPN-INGEST-799',
+    senderPhone: '01155443322',
+    organizationId: 'org_platform_ops',
+    paymentSourceId: 'src_platform_instapay',
+  });
+
+  assert.strictEqual(outcome.autoActivatedOrderId, orderMonthly5.id, 'Inbound transaction must trigger auto-activation of pending order');
+  const subDeviceFirst = SubscriptionService.getOrganizationSubscription(orgDeviceFirst);
+  assert.strictEqual(subDeviceFirst.hasSubscription, true);
+  assert.strictEqual(subDeviceFirst.deviceLimit, 5);
+  assert.strictEqual(subDeviceFirst.status, 'active');
+});
+

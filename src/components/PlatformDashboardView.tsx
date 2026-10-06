@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { PlatformOverview, SubscriptionPlan, SubscriptionOrder } from '../types';
 import { apiFetch } from '../api';
+import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUtils';
 
 interface PlatformDashboardViewProps {
   language: 'en' | 'ar';
@@ -171,6 +172,100 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
     }
   };
 
+  const handleExportCsv = () => {
+    if (activeTab === 'subscriptions') {
+      const columns: ExportColumn<any>[] = [
+        { header: 'Merchant', headerAr: 'اسم المتجر', accessor: (s) => (language === 'ar' ? s.org_name_ar || s.org_name : s.org_name) },
+        { header: 'Plan', headerAr: 'الباقة', accessor: (s) => (language === 'ar' ? s.plan_name_ar : s.plan_name_en) },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'Price (EGP)', headerAr: 'السعر (ج.م)', key: 'price_egp' },
+        { header: 'Device Limit', headerAr: 'الأجهزة المتاحة', key: 'device_limit' },
+        { header: 'Starts At', headerAr: 'تاريخ البدء', key: 'starts_at' },
+        { header: 'Ends At', headerAr: 'تاريخ الانتهاء', key: 'ends_at' },
+      ];
+      exportToCsv(`sarraf_platform_subscribers_${new Date().toISOString().slice(0, 10)}`, columns, subscriptions, language);
+    } else if (activeTab === 'inbound') {
+      const columns: ExportColumn<any>[] = [
+        { header: 'TRX ID', headerAr: 'رقم العملية', key: 'external_trx_id' },
+        { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'amount' },
+        { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'sender_phone' },
+        { header: 'Sender Name', headerAr: 'اسم الراسل', key: 'sender_name' },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'Matched Order', headerAr: 'الطلب المطابق', key: 'matched_order_number' },
+        { header: 'Received Date', headerAr: 'تاريخ الاستلام', key: 'financial_event_at' },
+      ];
+      exportToCsv(`sarraf_platform_inbound_${new Date().toISOString().slice(0, 10)}`, columns, platformTxns, language);
+    } else {
+      const columns: ExportColumn<SubscriptionOrder>[] = [
+        { header: 'Order #', headerAr: 'رقم الطلب', key: 'order_number' },
+        { header: 'Plan', headerAr: 'الباقة', accessor: (o) => (language === 'ar' ? o.plan_name_ar : o.plan_name_en) },
+        { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'price_egp' },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'reported_sender_phone' },
+        { header: 'Transfer Ref', headerAr: 'مرجع التحويل', key: 'reported_transfer_ref' },
+        { header: 'Created Date', headerAr: 'تاريخ الإنشاء', key: 'created_at' },
+        { header: 'Confirmed Date', headerAr: 'تاريخ التأكيد', key: 'confirmed_at' },
+      ];
+      exportToCsv(`sarraf_platform_orders_${new Date().toISOString().slice(0, 10)}`, columns, orders, language);
+    }
+  };
+
+  const handleExportExcel = () => {
+    if (activeTab === 'subscriptions') {
+      const columns: ExportColumn<any>[] = [
+        { header: 'Merchant', headerAr: 'اسم المتجر', accessor: (s) => (language === 'ar' ? s.org_name_ar || s.org_name : s.org_name) },
+        { header: 'Plan', headerAr: 'الباقة', accessor: (s) => (language === 'ar' ? s.plan_name_ar : s.plan_name_en) },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'Price (EGP)', headerAr: 'السعر (ج.م)', key: 'price_egp' },
+        { header: 'Device Limit', headerAr: 'الأجهزة المتاحة', key: 'device_limit' },
+        { header: 'Starts At', headerAr: 'تاريخ البدء', key: 'starts_at' },
+        { header: 'Ends At', headerAr: 'تاريخ الانتهاء', key: 'ends_at' },
+      ];
+      exportToExcelTable(
+        `sarraf_platform_subscribers_${new Date().toISOString().slice(0, 10)}`,
+        language === 'ar' ? 'سجل المشتركين في صرّاف' : 'Sarraf Ops Active Subscribers',
+        columns,
+        subscriptions,
+        language
+      );
+    } else if (activeTab === 'inbound') {
+      const columns: ExportColumn<any>[] = [
+        { header: 'TRX ID', headerAr: 'رقم العملية', key: 'external_trx_id' },
+        { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'amount' },
+        { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'sender_phone' },
+        { header: 'Sender Name', headerAr: 'اسم الراسل', key: 'sender_name' },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'Matched Order', headerAr: 'الطلب المطابق', key: 'matched_order_number' },
+        { header: 'Received Date', headerAr: 'تاريخ الاستلام', key: 'financial_event_at' },
+      ];
+      exportToExcelTable(
+        `sarraf_platform_inbound_${new Date().toISOString().slice(0, 10)}`,
+        language === 'ar' ? 'سجل تحويلات هاتف المنصة' : 'Sarraf Ops Platform Inbound Feed',
+        columns,
+        platformTxns,
+        language
+      );
+    } else {
+      const columns: ExportColumn<SubscriptionOrder>[] = [
+        { header: 'Order #', headerAr: 'رقم الطلب', key: 'order_number' },
+        { header: 'Plan', headerAr: 'الباقة', accessor: (o) => (language === 'ar' ? o.plan_name_ar : o.plan_name_en) },
+        { header: 'Amount (EGP)', headerAr: 'المبلغ (ج.م)', key: 'price_egp' },
+        { header: 'Status', headerAr: 'الحالة', key: 'status' },
+        { header: 'Sender Phone', headerAr: 'هاتف الراسل', key: 'reported_sender_phone' },
+        { header: 'Transfer Ref', headerAr: 'مرجع التحويل', key: 'reported_transfer_ref' },
+        { header: 'Created Date', headerAr: 'تاريخ الإنشاء', key: 'created_at' },
+        { header: 'Confirmed Date', headerAr: 'تاريخ التأكيد', key: 'confirmed_at' },
+      ];
+      exportToExcelTable(
+        `sarraf_platform_orders_${new Date().toISOString().slice(0, 10)}`,
+        language === 'ar' ? 'سجل طلبات الاشتراكات - إدارة المنصة' : 'Sarraf Ops Platform Subscription Orders',
+        columns,
+        orders,
+        language
+      );
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-margin-mobile sm:px-margin-desktop py-space-md sm:py-space-lg space-y-space-lg">
       {/* Header */}
@@ -192,14 +287,34 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
           </p>
         </div>
 
-        {/* Refresh button */}
-        <button
-          onClick={fetchPlatformData}
-          className="px-3 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface text-label-sm font-semibold flex items-center gap-1.5 transition-all self-start sm:self-auto cursor-pointer"
-        >
-          <span className="material-symbols-outlined text-base">refresh</span>
-          <span>{language === 'ar' ? 'تحديث البيانات' : 'Refresh'}</span>
-        </button>
+        {/* Action buttons: Export & Refresh */}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={handleExportExcel}
+            title={language === 'ar' ? 'تصدير بيانات التبويب كملف Excel' : 'Export tab data as Excel'}
+            className="px-3.5 py-1.5 rounded-lg border border-emerald-600/30 bg-emerald-600/10 hover:bg-emerald-600/20 text-label-sm font-bold text-emerald-700 dark:text-emerald-300 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">table_view</span>
+            <span>{language === 'ar' ? 'تصدير Excel' : 'Excel'}</span>
+          </button>
+
+          <button
+            onClick={handleExportCsv}
+            title={language === 'ar' ? 'تصدير بيانات التبويب كملف CSV' : 'Export tab data as CSV'}
+            className="px-3.5 py-1.5 rounded-lg border border-outline-variant bg-surface-container-low hover:bg-surface-container text-label-sm font-bold text-on-surface transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">download</span>
+            <span>{language === 'ar' ? 'تصدير CSV' : 'CSV'}</span>
+          </button>
+
+          <button
+            onClick={fetchPlatformData}
+            className="px-3 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface text-label-sm font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-base">refresh</span>
+            <span>{language === 'ar' ? 'تحديث البيانات' : 'Refresh'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Navigation Sub-Tabs */}
@@ -385,18 +500,55 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
                     <td className="py-3 px-3 font-mono text-label-xs text-primary font-bold">
                       {ord.reported_transfer_ref || '—'}
                     </td>
-                    <td className="py-3 px-3 text-label-xs text-on-surface-variant">
-                      {ord.reported_sender_info || '—'}
+                    <td className="py-3 px-3">
+                      <span className="font-mono text-label-xs font-bold text-on-surface block" dir="ltr">
+                        {ord.reported_sender_phone || ord.reported_sender_info || '—'}
+                      </span>
+                      {ord.reported_sender_phone && ord.reported_sender_info && ord.reported_sender_info !== ord.reported_sender_phone && (
+                        <span className="text-[11px] text-on-surface-variant block">{ord.reported_sender_info}</span>
+                      )}
                     </td>
                     <td className="py-3 px-3">
-                      <span className={`px-2 py-0.5 rounded-full text-label-xs font-bold ${
-                        ord.status === 'confirmed' ? 'bg-primary/10 text-primary' :
-                        ord.status === 'rejected' ? 'bg-error/10 text-error' :
-                        ord.status === 'in_review' || ord.status === 'payment_reported' ? 'bg-amber-500/10 text-amber-600' :
-                        'bg-surface-container text-on-surface-variant'
-                      }`}>
-                        {ord.status}
-                      </span>
+                      <div className="space-y-1">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-label-xs font-bold ${
+                          ord.status === 'confirmed'
+                            ? ord.approval_type === 'automatic'
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                              : 'bg-primary/10 text-primary'
+                            : ord.status === 'rejected'
+                            ? 'bg-error/10 text-error'
+                            : ord.review_notes?.includes('أقل من قيمة الباقة')
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+                            : 'bg-amber-500/10 text-amber-600'
+                        }`}>
+                          {ord.status === 'confirmed' ? (
+                            <>
+                              <span className="material-symbols-outlined text-[13px]">check_circle</span>
+                              <span>{ord.approval_type === 'automatic' ? (language === 'ar' ? 'تفعيل تلقائي ⚡' : 'Auto-Activated ⚡') : (language === 'ar' ? 'معتمد' : 'Confirmed')}</span>
+                            </>
+                          ) : ord.status === 'rejected' ? (
+                            <>
+                              <span className="material-symbols-outlined text-[13px]">cancel</span>
+                              <span>{language === 'ar' ? 'مرفوض' : 'Rejected'}</span>
+                            </>
+                          ) : ord.review_notes?.includes('أقل من قيمة الباقة') ? (
+                            <>
+                              <span className="material-symbols-outlined text-[13px]">warning</span>
+                              <span>{language === 'ar' ? 'مبلغ غير كافٍ - معلق' : 'Underpaid - Pending'}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="material-symbols-outlined text-[13px]">hourglass_empty</span>
+                              <span>{language === 'ar' ? 'قيد المراجعة' : 'In Review'}</span>
+                            </>
+                          )}
+                        </span>
+                        {ord.review_notes && (
+                          <p className="text-[11px] text-on-surface-variant line-clamp-2 max-w-xs" title={ord.review_notes}>
+                            {ord.review_notes}
+                          </p>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-3 text-center">
                       {ord.status !== 'confirmed' && ord.status !== 'rejected' ? (
@@ -500,6 +652,40 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
               </button>
             </div>
           </form>
+
+          {/* How Automatic Subscription Activation Works Guide */}
+          <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 space-y-2.5 pt-4">
+            <div className="flex items-center gap-2 text-primary font-bold text-label-md">
+              <span className="material-symbols-outlined text-xl">auto_mode</span>
+              <span>{language === 'ar' ? 'آلية التفعيل الأوتوماتيكي للاشتراكات في المنصة' : 'Automated Subscription Activation Architecture'}</span>
+            </div>
+            <ul className="text-body-xs text-on-surface-variant space-y-2 list-disc list-inside">
+              <li>
+                <strong className="text-on-surface">{language === 'ar' ? 'ربط هاتف صاحب المنصة:' : 'Owner Device Pairing:'}</strong>{' '}
+                {language === 'ar'
+                  ? 'قم بتنزيل التطبيق (MacroDroid أو Native Agent) على هاتفك الشخصي وربطه بالموقع بنفس رقم إنستاباي المسجل أعلاه كأي متجر عادي.'
+                  : 'Install the adapter on your personal phone and pair it to the platform with the above InstaPay number.'}
+              </li>
+              <li>
+                <strong className="text-on-surface">{language === 'ar' ? 'المطابقة برقم هاتف المحول:' : 'Sender Phone Matching:'}</strong>{' '}
+                {language === 'ar'
+                  ? 'عندما يشترك العميل ويسجل رقم هاتفه الذي حوّل منه، يقوم النظام بمطابقة رقم الهاتف الوارد في إشعار إنستاباي بهاتف العميل تلقائياً.'
+                  : 'When the customer enters their transferring phone number, the system automatically matches it with the incoming SMS.'}
+              </li>
+              <li>
+                <strong className="text-on-surface">{language === 'ar' ? 'تطابق أو زيادة المبلغ (تفعيل فوري):' : 'Amount Rule (Instant Activation):'}</strong>{' '}
+                {language === 'ar'
+                  ? 'إذا كان المبلغ المحول مساوياً أو أكبر من قيمة الباقة المختارة (مثلاً 8,000 ج.م لباقة 7,990 ج.م)، يتم تفعيل الباقة وتحديث صلاحية حساب العميل أوتوماتيكياً فوراً!'
+                  : 'If the transferred amount is equal to or greater than the plan price, the plan activates immediately.'}
+              </li>
+              <li>
+                <strong className="text-on-surface">{language === 'ar' ? 'المبالغ الأقل (تعليق للمراجعة):' : 'Underpayment (Hold for Review):'}</strong>{' '}
+                {language === 'ar'
+                  ? 'إذا كان المبلغ المحول أقل من سعر الباقة المطلوبة، يظل الطلب معلقاً (Pending/In Review) لتراجعه يدوياً وتتخذ القرار.'
+                  : 'If the amount is less than the plan price, the order remains in review for manual inspection.'}
+              </li>
+            </ul>
+          </div>
         </div>
       )}
 

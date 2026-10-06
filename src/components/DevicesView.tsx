@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Device } from '../types';
+import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUtils';
 
 interface DevicesViewProps {
   devices: Device[];
@@ -29,6 +30,52 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
     setPairingModalOpen(true);
   };
 
+  const handleExportCsv = () => {
+    const columns: ExportColumn<Device>[] = [
+      { header: 'Device ID', headerAr: 'رقم ومعرف الجهاز', key: 'deviceNumber' },
+      { header: 'Friendly Name', headerAr: 'اسم الجهاز', key: 'name' },
+      { header: 'Location', headerAr: 'الموقع', key: 'location' },
+      { header: 'Provider', headerAr: 'شبكة الدفع', key: 'providerLabel' },
+      { header: 'Phone Number', headerAr: 'رقم الشريحة', key: 'phoneNumber' },
+      {
+        header: 'Status',
+        headerAr: 'الحالة',
+        accessor: (d) => (d.status === 'online' ? 'متصل' : 'غير متصل'),
+      },
+      { header: 'Battery (%)', headerAr: 'البطارية (%)', key: 'batteryLevel' },
+      { header: 'Txns Today', headerAr: 'عمليات اليوم', key: 'txnsToday' },
+      { header: 'Volume Today (EGP)', headerAr: 'حجم اليوم (ج.م)', key: 'volumeToday' },
+      { header: 'Agent Version', headerAr: 'إصدار العميل', key: 'agentVersion' },
+    ];
+    exportToCsv(`sarraf_devices_${new Date().toISOString().slice(0, 10)}`, columns, devices, language);
+  };
+
+  const handleExportExcel = () => {
+    const columns: ExportColumn<Device>[] = [
+      { header: 'Device ID', headerAr: 'رقم ومعرف الجهاز', key: 'deviceNumber' },
+      { header: 'Friendly Name', headerAr: 'اسم الجهاز', key: 'name' },
+      { header: 'Location', headerAr: 'الموقع', key: 'location' },
+      { header: 'Provider', headerAr: 'شبكة الدفع', key: 'providerLabel' },
+      { header: 'Phone Number', headerAr: 'رقم الشريحة', key: 'phoneNumber' },
+      {
+        header: 'Status',
+        headerAr: 'الحالة',
+        accessor: (d) => (d.status === 'online' ? 'متصل' : 'غير متصل'),
+      },
+      { header: 'Battery (%)', headerAr: 'البطارية (%)', key: 'batteryLevel' },
+      { header: 'Txns Today', headerAr: 'عمليات اليوم', key: 'txnsToday' },
+      { header: 'Volume Today (EGP)', headerAr: 'حجم اليوم (ج.م)', key: 'volumeToday' },
+      { header: 'Agent Version', headerAr: 'إصدار العميل', key: 'agentVersion' },
+    ];
+    exportToExcelTable(
+      `sarraf_devices_${new Date().toISOString().slice(0, 10)}`,
+      language === 'ar' ? 'أسطول أجهزة الدفع - صرّاف' : 'Sarraf Ops Device Fleet',
+      columns,
+      devices,
+      language
+    );
+  };
+
   return (
     <div className="py-6 pb-28 max-w-7xl mx-auto px-4 sm:px-6 flex flex-col gap-6">
       {/* Header Bar */}
@@ -49,13 +96,35 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={handleStartPairing}
-          className="px-4 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold flex items-center justify-center gap-2 shadow-xs hover:bg-primary/90 active:scale-95 transition-all cursor-pointer self-start sm:self-auto"
-        >
-          <span className="material-symbols-outlined text-lg">add_circle</span>
-          <span>{language === 'ar' ? 'ربط جهاز دفع جديد' : 'Pair New Device'}</span>
-        </button>
+        <div className="flex items-center flex-wrap gap-2.5 self-start sm:self-auto">
+          {/* Export Excel */}
+          <button
+            onClick={handleExportExcel}
+            title={language === 'ar' ? 'تصدير قائمة الأجهزة كملف Excel' : 'Export devices as Excel'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600/10 border border-emerald-600/30 text-emerald-700 dark:text-emerald-300 font-bold text-label-sm hover:bg-emerald-600/20 active:scale-95 transition-all cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">table_view</span>
+            <span>{language === 'ar' ? 'تصدير Excel' : 'Export Excel'}</span>
+          </button>
+
+          {/* Export CSV */}
+          <button
+            onClick={handleExportCsv}
+            title={language === 'ar' ? 'تصدير قائمة الأجهزة كملف CSV' : 'Export devices as CSV'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant text-on-surface font-bold text-label-sm hover:bg-surface-container active:scale-95 transition-all cursor-pointer shadow-xs"
+          >
+            <span className="material-symbols-outlined text-base">download</span>
+            <span>CSV</span>
+          </button>
+
+          <button
+            onClick={handleStartPairing}
+            className="px-4 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold flex items-center justify-center gap-2 shadow-xs hover:bg-primary/90 active:scale-95 transition-all cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-lg">add_circle</span>
+            <span>{language === 'ar' ? 'ربط جهاز دفع جديد' : 'Pair New Device'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Fleet Summary Pills */}
