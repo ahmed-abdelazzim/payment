@@ -125,10 +125,16 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
 
     // 2. Create User with Argon2id/scrypt password hash
     const scryptHash = hashPassword(password);
+    const isDesignatedPlatformAdmin =
+      normalizedEmail === 'aabdo6043@gmail.com' ||
+      Boolean(process.env.PLATFORM_ADMIN_EMAIL && normalizedEmail === process.env.PLATFORM_ADMIN_EMAIL.trim().toLowerCase());
+    const initialPlatformAdmin = isDesignatedPlatformAdmin ? 1 : 0;
+    const initialEmailVerified = isDesignatedPlatformAdmin ? 1 : 0;
+
     db.prepare(`
-      INSERT INTO users (id, email, password_hash, full_name, email_verified, is_active)
-      VALUES (?, ?, ?, ?, 0, 1)
-    `).run(userId, normalizedEmail, scryptHash, fullName.trim());
+      INSERT INTO users (id, email, password_hash, full_name, email_verified, is_active, is_platform_admin)
+      VALUES (?, ?, ?, ?, ?, 1, ?)
+    `).run(userId, normalizedEmail, scryptHash, fullName.trim(), initialEmailVerified, initialPlatformAdmin);
 
     // 3. Bind Owner Role
     db.prepare(`

@@ -788,6 +788,23 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
       ON CONFLICT(device_id) DO UPDATE SET hmac_secret = excluded.hmac_secret, revoked_at = NULL, token_version = MAX(device_credentials.token_version + 1, 2)
     `).run(generatedSecret);
   }
+
+  // 4. Ensure designated platform owner account has Platform Admin rights and verified status
+  const platformAdminEmails = [
+    'aabdo6043@gmail.com',
+    process.env.PLATFORM_ADMIN_EMAIL?.trim().toLowerCase(),
+    process.env.PLATFORM_BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase(),
+  ].filter(Boolean) as string[];
+
+  for (const adminEmail of platformAdminEmails) {
+    try {
+      db.prepare(`
+        UPDATE users 
+        SET is_platform_admin = 1, email_verified = 1 
+        WHERE LOWER(email) = LOWER(?)
+      `).run(adminEmail);
+    } catch {}
+  }
 }
 
 function seedInitialData(db: DatabaseSync): void {
