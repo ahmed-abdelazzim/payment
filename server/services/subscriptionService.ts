@@ -199,7 +199,7 @@ export class SubscriptionService {
     `).get('current') as any;
     return {
       instapay_number: row?.instapay_number || '01551234263',
-      beneficiary_name: row?.beneficiary_name || 'عبدالرحمن عبده',
+      beneficiary_name: row?.beneficiary_name || '******أحمد ع****** ع****** ر',
       platform_org_id: row?.platform_org_id || 'org_platform_ops',
       platform_source_id: row?.platform_source_id || 'src_platform_instapay',
     };

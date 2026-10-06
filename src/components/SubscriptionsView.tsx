@@ -19,7 +19,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   const [orders, setOrders] = useState<SubscriptionOrder[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [platformInstapayNumber, setPlatformInstapayNumber] = useState<string>('01551234263');
-  const [beneficiaryName, setBeneficiaryName] = useState<string>('عبدالرحمن عبده');
+  const [beneficiaryName, setBeneficiaryName] = useState<string>('******أحمد ع****** ع****** ر');
 
   // Checkout Modal State
   const [activeOrder, setActiveOrder] = useState<SubscriptionOrder | null>(null);

@@ -393,7 +393,7 @@ export function initSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS platform_settings (
       id TEXT PRIMARY KEY DEFAULT 'current',
       instapay_number TEXT NOT NULL DEFAULT '01551234263',
-      beneficiary_name TEXT NOT NULL DEFAULT 'عبدالرحمن عبده',
+      beneficiary_name TEXT NOT NULL DEFAULT '******أحمد ع****** ع****** ر',
       platform_org_id TEXT NOT NULL DEFAULT 'org_platform_ops',
       platform_source_id TEXT NOT NULL DEFAULT 'src_platform_instapay',
       platform_device_id TEXT NOT NULL DEFAULT 'dev_platform_terminal',
@@ -743,7 +743,13 @@ export function bootstrapPlatformAndPlans(db: DatabaseSync): void {
   if (!settingsRow) {
     db.prepare(`
       INSERT INTO platform_settings (id, instapay_number, beneficiary_name, platform_org_id, platform_source_id, platform_device_id)
-      VALUES ('current', '01551234263', 'عبدالرحمن عبده', 'org_platform_ops', 'src_platform_instapay', 'dev_platform_terminal')
+      VALUES ('current', '01551234263', '******أحمد ع****** ع****** ر', 'org_platform_ops', 'src_platform_instapay', 'dev_platform_terminal')
+    `).run();
+  } else {
+    db.prepare(`
+      UPDATE platform_settings
+      SET beneficiary_name = '******أحمد ع****** ع****** ر'
+      WHERE id = 'current' AND (beneficiary_name = 'عبدالرحمن عبده' OR beneficiary_name IS NULL OR beneficiary_name = '')
     `).run();
   }
 

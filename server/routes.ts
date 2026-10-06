@@ -2201,7 +2201,7 @@ apiRouter.post('/platform/settings', requireAuth, requirePlatformOwner, (req: Au
 
   const db = getDatabase();
   const cleanNum = String(instapayNumber).trim();
-  const cleanName = beneficiaryName ? String(beneficiaryName).trim() : 'عبدالرحمن عبده';
+  const cleanName = beneficiaryName ? String(beneficiaryName).trim() : '******أحمد ع****** ع****** ر';
 
   db.prepare(`
     UPDATE platform_settings

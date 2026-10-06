@@ -23,7 +23,7 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
 
   // Platform Settings State
   const [instapayNumber, setInstapayNumber] = useState<string>('01551234263');
-  const [beneficiaryName, setBeneficiaryName] = useState<string>('عبدالرحمن عبده');
+  const [beneficiaryName, setBeneficiaryName] = useState<string>('******أحمد ع****** ع****** ر');
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
 
   // Review & Approval Modal State
@@ -53,7 +53,7 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
       if (settRes.ok) {
         const s = await settRes.json();
         setInstapayNumber(s.instapay_number || '01551234263');
-        setBeneficiaryName(s.beneficiary_name || 'عبدالرحمن عبده');
+        setBeneficiaryName(s.beneficiary_name || '******أحمد ع****** ع****** ر');
       }
     } catch {
       // offline
@@ -484,7 +484,7 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
                 required
                 value={beneficiaryName}
                 onChange={(e) => setBeneficiaryName(e.target.value)}
-                placeholder="عبدالرحمن عبده"
+                placeholder="******أحمد ع****** ع****** ر"
                 className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-sm focus:outline-none focus:border-primary"
               />
             </div>
