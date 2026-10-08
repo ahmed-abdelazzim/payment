@@ -301,6 +301,7 @@ export class SubscriptionService {
     organizationId: string;
     reportedTransferRef?: string;
     reportedSenderInfo?: string;
+    reportedSenderPhone?: string;
     reportedTransferTime?: string;
     reportedNotes?: string;
   }): { order: SubscriptionOrder; matched: boolean } {

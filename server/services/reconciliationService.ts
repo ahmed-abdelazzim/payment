@@ -2,6 +2,7 @@ import { getDatabase } from '../db';
 import { ParsedTransaction } from '../parser/engine';
 import { LimitEngine } from './limitEngine';
 import { toMinor, fromMinor, MoneyError } from '../money';
+import { CheckoutService } from './checkoutService';
 
 export interface IngestionEventInput {
   organizationId: string;
@@ -284,6 +285,21 @@ export class ReconciliationService {
           financial_event_at: input.financialEventAt,
         });
 
+        // Match against any waiting e-commerce checkout sessions
+        try {
+          CheckoutService.matchIncomingTransaction(db, input.organizationId, {
+            id: trxId,
+            external_trx_id: input.parsed.externalTrxId,
+            amount_minor: amountMinor,
+            currency: input.parsed.currency,
+            provider,
+            sender_phone: input.parsed.senderPhone,
+            financial_event_at: input.financialEventAt,
+          });
+        } catch (e) {
+          console.error('[ReconciliationService] Checkout match error:', e);
+        }
+
         // Cascade Resolution: Check if any pending_ordering transactions can now resolve!
         ReconciliationService.resolvePendingCascade(db, input.organizationId, balanceAccountId, balanceAfterMinor);
       }
@@ -380,6 +396,19 @@ export class ReconciliationService {
         }
 
         ReconciliationService.enqueueConfirmedWebhook(db, organizationId, { ...row, amount_minor: rowAmount });
+
+        try {
+          CheckoutService.matchIncomingTransaction(db, organizationId, {
+            id: row.id,
+            external_trx_id: row.external_trx_id,
+            amount_minor: rowAmount,
+            currency: row.currency,
+            provider: row.provider,
+            financial_event_at: row.financial_event_at,
+          });
+        } catch (e) {
+          console.error('[ReconciliationService] Checkout cascade match error:', e);
+        }
 
         resolvedAny = true;
         break; // restart scan with new balance

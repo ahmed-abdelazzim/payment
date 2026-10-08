@@ -54,6 +54,9 @@ async function startServer() {
     console.info('[Sarraf Ops] Outbox delivery is enabled; expecting a separate worker process.');
   }
 
+  // Serve Drop-in Checkout JS SDK
+  app.use('/sdk', express.static(path.resolve(__dirname, 'server', 'public', 'sdk')));
+
   // Mount API Gateway routes
   app.use('/api/v1', apiRouter);
 

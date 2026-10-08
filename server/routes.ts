@@ -1,3 +1,5 @@
+import path from 'node:path';
+import fs from 'node:fs';
 import { Router, Request, Response } from 'express';
 import crypto from 'node:crypto';
 import { getDatabase } from './db';
@@ -21,13 +23,16 @@ import { SubscriptionService } from './services/subscriptionService';
 import { hashPassword, verifyPassword } from './security/passwords';
 import { EmailService } from './services/emailService';
 import { GoogleSheetsService } from './services/googleSheetsService';
+import { ApiKeyService } from './services/apiKeyService';
+import { CheckoutService } from './services/checkoutService';
+import { PaymentLinkService } from './services/paymentLinkService';
 
 export const apiRouter = Router();
 
 /**
- * State changes made through browser cookies must be same-origin.  Capture
- * adapters authenticate with device HMAC instead, so their two routes are
- * intentionally excluded from this cookie-oriented CSRF guard.
+ * State changes made through browser cookies must be same-origin. Capture
+ * adapters authenticate with device HMAC, and external store integrations
+ * authenticate via merchant API Keys or public checkout sessions.
  */
 apiRouter.use((req, res, next) => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
@@ -35,7 +40,25 @@ apiRouter.use((req, res, next) => {
     return;
   }
 
+  // Exempt device telemetry & ingestion
   if (req.path === '/devices/ingest' || /^\/devices\/[^/]+\/telemetry$/.test(req.path)) {
+    next();
+    return;
+  }
+
+  // Exempt checkout sessions, payment links, and store integrations
+  if (
+    req.path === '/checkout/sessions' ||
+    /^\/checkout\/sessions\/[^/]+\/(claim|simulate)$/.test(req.path) ||
+    /^\/payment-links\/[^/]+\/checkout$/.test(req.path) ||
+    req.path.startsWith('/integrations/easyorders') ||
+    req.path.startsWith('/integrations/shopify') ||
+    Boolean(
+      req.headers.authorization?.startsWith('Bearer sk_') ||
+      req.headers['x-api-key'] ||
+      req.headers['x-public-key']
+    )
+  ) {
     next();
     return;
   }
@@ -1952,6 +1975,20 @@ apiRouter.post('/transactions/:id/approve', requireAuth, requireRole(['owner', '
       financial_event_at: trx.financial_event_at,
     });
 
+    try {
+      CheckoutService.matchIncomingTransaction(db, req.user!.organizationId, {
+        id: trx.id,
+        external_trx_id: trx.external_trx_id,
+        amount_minor: amountMinor,
+        currency: trx.currency,
+        provider: trx.provider,
+        sender_phone: trx.sender_phone || undefined,
+        financial_event_at: trx.financial_event_at,
+      });
+    } catch (e) {
+      console.error('[ManualApproval] Checkout match error:', e);
+    }
+
     AuditService.record({
       organizationId: req.user!.organizationId,
       actorIdentity: req.user!.email,
@@ -2550,3 +2587,516 @@ apiRouter.post('/platform/settings/google-oauth', requireAuth, requirePlatformOw
   GoogleSheetsService.updatePlatformGoogleCredentials(clientId, clientSecret);
   res.json({ message: 'تم حفظ بيانات Google OAuth بنجاح!' });
 });
+
+// ==========================================
+// 10. MERCHANT API KEYS & OPEN WORKSPACE
+// ==========================================
+
+// List API Keys
+apiRouter.get('/api-keys', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const keys = ApiKeyService.listKeys(req.user!.organizationId);
+  res.json(keys);
+});
+
+// Quick Setup: Auto-provision default keys if none exist
+apiRouter.get('/api-keys/quick-setup', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const keys = ApiKeyService.getOrCreateDefaultKeys(req.user!.organizationId);
+  const db = getDatabase();
+  const org = db.prepare('SELECT webhook_url, webhook_secret FROM organizations WHERE id = ?').get(req.user!.organizationId) as any;
+  const sourcesCount = (db.prepare('SELECT COUNT(*) as count FROM payment_sources WHERE organization_id = ? AND is_paused_for_new_instructions = 0 AND retired_at IS NULL').get(req.user!.organizationId) as any)?.count || 0;
+  const devicesCount = (db.prepare('SELECT COUNT(*) as count FROM devices WHERE organization_id = ? AND status = "online"').get(req.user!.organizationId) as any)?.count || 0;
+
+  res.json({
+    keys,
+    webhookUrl: org?.webhook_url || '',
+    webhookSecretConfigured: Boolean(org?.webhook_secret),
+    activeSourcesCount: sourcesCount,
+    onlineDevicesCount: devicesCount,
+    isReadyForPayments: sourcesCount > 0,
+  });
+});
+
+// Generate new key set
+apiRouter.post('/api-keys', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const { name, mode } = req.body;
+  if (!name || typeof name !== 'string') {
+    res.status(400).json({ error: 'NAME_REQUIRED', message: 'اسم المفتاح مطلوب' });
+    return;
+  }
+
+  const keyMode = mode === 'test' ? 'test' : 'live';
+  try {
+    const keySet = ApiKeyService.generateKeySet(req.user!.organizationId, name.trim(), keyMode);
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'API_KEY_GENERATED',
+      resourceType: 'api_key',
+      resourceId: keySet.keyId,
+      originIp: req.ip,
+      details: { name, mode: keyMode },
+    });
+    res.status(201).json(keySet);
+  } catch (err: any) {
+    res.status(500).json({ error: 'KEY_GEN_FAILED', message: err.message || 'تعذر توليد المفتاح' });
+  }
+});
+
+// Revoke API Key
+apiRouter.post('/api-keys/:id/revoke', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const success = ApiKeyService.revokeKey(req.user!.organizationId, req.params.id);
+  if (!success) {
+    res.status(404).json({ error: 'KEY_NOT_FOUND', message: 'المفتاح غير موجود أو تم إلغاؤه مسبقاً' });
+    return;
+  }
+
+  AuditService.record({
+    organizationId: req.user!.organizationId,
+    actorIdentity: req.user!.email,
+    action: 'API_KEY_REVOKED',
+    resourceType: 'api_key',
+    resourceId: req.params.id,
+    originIp: req.ip,
+    details: {},
+  });
+  res.json({ message: 'تم إيقاف المفتاح بنجاح' });
+});
+
+// ==========================================
+// 11. QUICK PAYMENT LINKS
+// ==========================================
+
+// List Payment Links
+apiRouter.get('/payment-links', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const links = PaymentLinkService.listPaymentLinks(req.user!.organizationId);
+  res.json(links);
+});
+
+// Create Payment Link
+apiRouter.post('/payment-links', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
+  const { title, description, amount, reusable, redirectUrl } = req.body;
+  if (!title || typeof title !== 'string' || !amount) {
+    res.status(400).json({ error: 'MISSING_FIELDS', message: 'العنوان والمبلغ مطلوبان لإنشاء رابط الدفع' });
+    return;
+  }
+
+  try {
+    const link = PaymentLinkService.createPaymentLink(req.user!.organizationId, {
+      title,
+      description,
+      amount: Number(amount),
+      reusable: reusable !== false,
+      redirectUrl,
+    });
+
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'PAYMENT_LINK_CREATED',
+      resourceType: 'payment_link',
+      resourceId: link.id,
+      originIp: req.ip,
+      details: { title, amount },
+    });
+
+    res.status(201).json(link);
+  } catch (err: any) {
+    res.status(400).json({ error: 'CREATE_LINK_FAILED', message: err.message || 'تعذر إنشاء رابط الدفع' });
+  }
+});
+
+// Toggle Payment Link Active Status
+apiRouter.post('/payment-links/:id/toggle', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
+  const success = PaymentLinkService.togglePaymentLink(req.user!.organizationId, req.params.id);
+  if (!success) {
+    res.status(404).json({ error: 'LINK_NOT_FOUND', message: 'رابط الدفع غير موجود' });
+    return;
+  }
+  res.json({ message: 'تم تحديث حالة الرابط' });
+});
+
+// Delete Payment Link
+apiRouter.delete('/payment-links/:id', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const success = PaymentLinkService.deletePaymentLink(req.user!.organizationId, req.params.id);
+  if (!success) {
+    res.status(404).json({ error: 'LINK_NOT_FOUND', message: 'رابط الدفع غير موجود' });
+    return;
+  }
+  res.json({ message: 'تم حذف رابط الدفع بنجاح' });
+});
+
+// Public: Get Payment Link details
+apiRouter.get('/payment-links/:id/public', (req: Request, res: Response) => {
+  const link = PaymentLinkService.getPaymentLink(req.params.id);
+  if (!link || !link.isActive) {
+    res.status(404).json({ error: 'LINK_NOT_FOUND', message: 'رابط الدفع غير صالح أو تم إيقافه' });
+    return;
+  }
+
+  const db = getDatabase();
+  const org = db.prepare('SELECT name, name_ar FROM organizations WHERE id = ?').get(link.organizationId) as any;
+
+  res.json({
+    ...link,
+    merchantName: org?.name || '',
+    merchantNameAr: org?.name_ar || org?.name || '',
+  });
+});
+
+// Public: Initialize Checkout Session from a Payment Link
+apiRouter.post('/payment-links/:id/checkout', (req: Request, res: Response) => {
+  const link = PaymentLinkService.getPaymentLink(req.params.id);
+  if (!link || !link.isActive) {
+    res.status(404).json({ error: 'LINK_NOT_FOUND', message: 'رابط الدفع غير متاح حالياً' });
+    return;
+  }
+
+  const { customerName, customerPhone, customerEmail } = req.body;
+  try {
+    const session = CheckoutService.createSession(link.organizationId, {
+      orderId: `LINK-${link.id.slice(-6).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`,
+      amount: link.amount,
+      customerName,
+      customerPhone,
+      customerEmail,
+      paymentLinkId: link.id,
+      returnUrl: link.redirectUrl || undefined,
+    });
+
+    res.status(201).json(session);
+  } catch (err: any) {
+    res.status(400).json({ error: 'CHECKOUT_FAILED', message: err.message || 'تعذر بدء عملية الدفع' });
+  }
+});
+
+// ==========================================
+// 12. CHECKOUT SESSIONS (PAYMENT GATEWAY API)
+// ==========================================
+
+// Create Checkout Session (External stores via API Key or dashboard user session)
+apiRouter.post('/checkout/sessions', (req: Request, res: Response) => {
+  let organizationId: string | null = null;
+  let mode: 'live' | 'test' = 'live';
+
+  // 1. Try Authenticating via Secret Key (Server-to-Server)
+  const authHeader = req.headers.authorization || (req.headers['x-secret-key'] as string);
+  if (authHeader) {
+    const authResult = ApiKeyService.authenticateSecretKey(authHeader);
+    if (authResult) {
+      organizationId = authResult.organizationId;
+      mode = authResult.mode;
+    }
+  }
+
+  // 2. Try Authenticating via Public Key (Drop-in JS SDK)
+  if (!organizationId && req.headers['x-public-key']) {
+    const pubResult = ApiKeyService.authenticatePublicKey(req.headers['x-public-key'] as string);
+    if (pubResult) {
+      organizationId = pubResult.organizationId;
+      mode = pubResult.mode;
+    }
+  }
+
+  // 3. Fallback to Cookie Session (if requested from inside the dashboard)
+  if (!organizationId) {
+    const token = getSessionTokenFromRequest(req);
+    if (token) {
+      const db = getDatabase();
+      const tokenHash = hashSessionToken(token);
+      const session = db.prepare('SELECT organization_id FROM sessions WHERE token = ? AND expires_at > datetime("now")').get(tokenHash) as any;
+      if (session) {
+        organizationId = session.organization_id;
+      }
+    }
+  }
+
+  if (!organizationId) {
+    res.status(401).json({
+      error: 'AUTHENTICATION_REQUIRED',
+      message: 'مفتاح الربط مطلوب لإنشاء جلسة دفع (Authorization: Bearer sk_... أو X-Public-Key: pk_...)',
+    });
+    return;
+  }
+
+  const {
+    orderId,
+    order_id,
+    amount,
+    currency,
+    customerName,
+    customer_name,
+    customerPhone,
+    customer_phone,
+    customerEmail,
+    customer_email,
+    returnUrl,
+    return_url,
+    cancelUrl,
+    cancel_url,
+    webhookUrl,
+    webhook_url,
+    metadata,
+    expiresInMinutes,
+  } = req.body;
+
+  const resolvedAmount = parseFloat(amount);
+  if (!resolvedAmount || isNaN(resolvedAmount) || resolvedAmount <= 0) {
+    res.status(400).json({ error: 'INVALID_AMOUNT', message: 'مبلغ الدفع يجب أن يكون رقماً موجباً أكبر من الصفر' });
+    return;
+  }
+
+  try {
+    const session = CheckoutService.createSession(organizationId, {
+      orderId: orderId || order_id,
+      amount: resolvedAmount,
+      currency: currency || 'EGP',
+      customerName: customerName || customer_name,
+      customerPhone: customerPhone || customer_phone,
+      customerEmail: customerEmail || customer_email,
+      mode,
+      returnUrl: returnUrl || return_url,
+      cancelUrl: cancelUrl || cancel_url,
+      webhookUrl: webhookUrl || webhook_url,
+      metadata,
+      expiresInMinutes,
+    });
+
+    res.status(201).json(session);
+  } catch (err: any) {
+    res.status(400).json({ error: 'SESSION_CREATE_FAILED', message: err.message || 'تعذر إنشاء جلسة الدفع' });
+  }
+});
+
+// List recent sessions for merchant dashboard
+apiRouter.get('/checkout/sessions', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const sessions = CheckoutService.listSessions(req.user!.organizationId, 50);
+  res.json(sessions);
+});
+
+// Public: Get Session details for Hosted Checkout page
+apiRouter.get('/checkout/sessions/:id', (req: Request, res: Response) => {
+  const session = CheckoutService.getSession(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: 'SESSION_NOT_FOUND', message: 'جلسة الدفع غير موجودة أو انتهت صلاحيتها' });
+    return;
+  }
+  res.json(session);
+});
+
+// Public: Live Polling Status Check
+apiRouter.get('/checkout/sessions/:id/status', (req: Request, res: Response) => {
+  const status = CheckoutService.getSessionStatus(req.params.id);
+  if (!status) {
+    res.status(404).json({ error: 'SESSION_NOT_FOUND', message: 'جلسة الدفع غير موجودة' });
+    return;
+  }
+  res.json(status);
+});
+
+// Public: Customer claims payment by providing phone or reference
+apiRouter.post('/checkout/sessions/:id/claim', (req: Request, res: Response) => {
+  const { senderPhone, transferRef } = req.body;
+  try {
+    const result = CheckoutService.claimManualReference(req.params.id, { senderPhone, transferRef });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: 'CLAIM_FAILED', message: err.message || 'تعذر معالجة بيانات التحويل' });
+  }
+});
+
+// Simulator: Simulate successful payment (Dashboard & Test Mode)
+apiRouter.post('/checkout/sessions/:id/simulate', (req: Request, res: Response) => {
+  try {
+    const session = CheckoutService.simulateConfirmation(req.params.id);
+    res.json({ success: true, message: 'تمت محاكاة الدفع بنجاح!', session });
+  } catch (err: any) {
+    res.status(400).json({ error: 'SIMULATION_FAILED', message: err.message || 'فشلت محاكاة الدفع' });
+  }
+});
+
+// ==========================================
+// 13. E-COMMERCE INTEGRATION WEBHOOKS & PLUGINS
+// ==========================================
+
+// Webhook Delivery Logs for Merchant
+apiRouter.get('/integrations/webhooks/deliveries', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const db = getDatabase();
+  const deliveries = db.prepare(`
+    SELECT wd.*, we.url, we.subscribed_events
+    FROM webhook_deliveries wd
+    JOIN webhook_endpoints we ON wd.endpoint_id = we.id
+    WHERE we.organization_id = ?
+    ORDER BY wd.delivered_at DESC
+    LIMIT 50
+  `).all(req.user!.organizationId);
+
+  res.json(deliveries);
+});
+
+// Test Webhook Dispatch to Merchant Store
+apiRouter.post('/integrations/webhooks/test-ping', requireAuth, requireRole(['owner', 'admin']), async (req: AuthenticatedUserRequest, res: Response) => {
+  const db = getDatabase();
+  const org = db.prepare('SELECT webhook_url, webhook_secret FROM organizations WHERE id = ?').get(req.user!.organizationId) as any;
+
+  if (!org?.webhook_url) {
+    res.status(400).json({ error: 'WEBHOOK_NOT_CONFIGURED', message: 'يرجى إدخال رابط Webhook URL أولاً في الإعدادات' });
+    return;
+  }
+
+  const endpointUrl = org.webhook_url;
+  const secret = org.webhook_secret || 'sec_default_test';
+
+  const testEvent = {
+    id: `evt_test_${Date.now()}`,
+    type: 'webhook.test_ping',
+    occurred_at: new Date().toISOString(),
+    data: {
+      message: 'هذا إشعار تجريبي من بوابة صرّاف للتأكد من نجاح الربط مع متجرك.',
+      organization_id: req.user!.organizationId,
+      timestamp: new Date().toISOString(),
+    },
+  };
+
+  try {
+    const signature = crypto.createHmac('sha256', secret).update(JSON.stringify(testEvent)).digest('hex');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(endpointUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Sarraf-Event': 'webhook.test_ping',
+        'X-Sarraf-Signature': signature,
+      },
+      body: JSON.stringify(testEvent),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const responseText = await response.text().catch(() => '');
+
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'WEBHOOK_TEST_PING',
+      resourceType: 'webhook',
+      resourceId: endpointUrl,
+      originIp: req.ip,
+      details: { status: response.status, responseText: responseText.slice(0, 500) },
+    });
+
+    res.json({
+      success: response.ok,
+      httpStatus: response.status,
+      responseBody: responseText.slice(0, 300),
+      message: response.ok ? 'تم إرسال الإشعار التجريبي واستلام الرد 200 OK بنجاح!' : `تم الاتصال ولكن المتجر أعاد كود ${response.status}`,
+    });
+  } catch (err: any) {
+    res.status(400).json({
+      success: false,
+      error: 'PING_FAILED',
+      message: err.message || 'تعذر الاتصال بالرابط المحدد (تأكد من عمل الرابط وصلاحيته)',
+    });
+  }
+});
+
+// Easy Orders (إيزي أوردرز) Native Webhook Receiver
+apiRouter.post('/integrations/easyorders/webhook', (req: Request, res: Response) => {
+  // Identify merchant via query param or header
+  const apiKey = (req.query.api_key as string) || (req.headers['x-api-key'] as string);
+  const auth = apiKey ? ApiKeyService.authenticateSecretKey(apiKey) : null;
+
+  if (!auth) {
+    res.status(401).json({ error: 'UNAUTHORIZED', message: 'مفتاح الربط api_key غير صالح أو مفقود في الرابط' });
+    return;
+  }
+
+  const payload = req.body || {};
+  const orderId = String(payload.order_id || payload.id || payload.code || `EO-${Date.now().toString(36)}`);
+  const amount = parseFloat(payload.grand_total || payload.total || payload.amount || '0');
+  const customerName = payload.customer_name || payload.name || payload.customer?.name || '';
+  const customerPhone = payload.customer_phone || payload.phone || payload.customer?.phone || '';
+
+  if (!amount || amount <= 0) {
+    res.status(400).json({ error: 'INVALID_AMOUNT', message: 'مبلغ الطلب غير صالح في إشعار Easy Orders' });
+    return;
+  }
+
+  try {
+    const session = CheckoutService.createSession(auth.organizationId, {
+      orderId,
+      amount,
+      customerName,
+      customerPhone,
+      mode: auth.mode,
+      metadata: { source: 'easy_orders', raw_payload: payload },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'تم إنشاء جلسة دفع صرّاف بنجاح لطلب إيزي أوردرز',
+      order_id: orderId,
+      checkout_url: session.checkoutUrl,
+      session_id: session.id,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'SESSION_CREATION_FAILED', message: err.message });
+  }
+});
+
+// Shopify Order Webhook Receiver
+apiRouter.post('/integrations/shopify/webhook', (req: Request, res: Response) => {
+  const apiKey = (req.query.api_key as string) || (req.headers['x-api-key'] as string);
+  const auth = apiKey ? ApiKeyService.authenticateSecretKey(apiKey) : null;
+
+  if (!auth) {
+    res.status(401).json({ error: 'UNAUTHORIZED', message: 'API key required' });
+    return;
+  }
+
+  const payload = req.body || {};
+  const orderId = String(payload.name || payload.order_number || payload.id || `SHOP-${Date.now()}`);
+  const amount = parseFloat(payload.total_price || payload.current_total_price || '0');
+  const customerName = payload.customer ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() : '';
+  const customerPhone = payload.customer?.phone || payload.billing_address?.phone || payload.phone || '';
+
+  if (!amount || amount <= 0) {
+    res.status(400).json({ error: 'INVALID_AMOUNT' });
+    return;
+  }
+
+  try {
+    const session = CheckoutService.createSession(auth.organizationId, {
+      orderId,
+      amount,
+      customerName,
+      customerPhone,
+      mode: auth.mode,
+      metadata: { source: 'shopify', order_id: payload.id },
+    });
+
+    res.status(200).json({
+      success: true,
+      order_id: orderId,
+      checkout_url: session.checkoutUrl,
+      session_id: session.id,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'SESSION_CREATION_FAILED', message: err.message });
+  }
+});
+
+// Download WooCommerce Ready PHP Plugin
+apiRouter.get('/integrations/woocommerce/plugin-download', (_req: Request, res: Response) => {
+  const pluginPath = path.resolve(__dirname, 'templates', 'woocommerce', 'class-wc-gateway-sarraf.php');
+  if (!fs.existsSync(pluginPath)) {
+    res.status(404).send('Plugin file not found');
+    return;
+  }
+
+  res.setHeader('Content-Disposition', 'attachment; filename="class-wc-gateway-sarraf.php"');
+  res.setHeader('Content-Type', 'application/x-php');
+  fs.createReadStream(pluginPath).pipe(res);
+});
+

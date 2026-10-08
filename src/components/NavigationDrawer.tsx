@@ -172,6 +172,23 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
 
             <button
               onClick={() => {
+                onSelectTab('integrations');
+                onClose();
+              }}
+              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
+                currentTab === 'integrations'
+                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
+                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
+              }`}
+            >
+              <span className="material-symbols-outlined text-xl text-blue-500">storefront</span>
+              <span className="text-body-md font-semibold">
+                {language === 'ar' ? 'الربط وبوابة الدفع (المتاجر و API)' : 'Gateway & Integrations Hub'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
                 onSelectTab('rails');
                 onClose();
               }}

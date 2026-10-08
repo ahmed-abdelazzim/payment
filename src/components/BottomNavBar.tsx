@@ -63,18 +63,18 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
         )}
       </button>
 
-      {/* Tab 4: Rails */}
+      {/* Tab 4: Gateway & Integrations */}
       <button
-        onClick={() => onSelectTab('rails')}
-        className={`flex flex-col items-center justify-center py-1.5 px-3.5 rounded-2xl active:scale-90 transition-all cursor-pointer ${
-          currentTab === 'rails'
+        onClick={() => onSelectTab('integrations')}
+        className={`flex flex-col items-center justify-center py-1.5 px-2.5 rounded-2xl active:scale-90 transition-all cursor-pointer ${
+          currentTab === 'integrations'
             ? 'bg-primary/10 text-primary font-bold shadow-xs border border-primary/20'
             : 'text-on-surface-variant hover:bg-surface-container'
         }`}
       >
-        <span className="material-symbols-outlined text-xl">tune</span>
+        <span className="material-symbols-outlined text-xl">storefront</span>
         <span className="text-label-xs font-semibold mt-0.5">
-          {language === 'ar' ? 'المسارات' : 'Rails'}
+          {language === 'ar' ? 'الربط' : 'Gateway'}
         </span>
       </button>
 

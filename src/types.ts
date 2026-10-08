@@ -157,6 +157,7 @@ export interface SubscriptionOrder {
   status: 'pending_payment' | 'payment_reported' | 'in_review' | 'confirmed' | 'rejected' | 'expired';
   reported_transfer_ref?: string;
   reported_sender_info?: string;
+  reported_sender_phone?: string;
   reported_transfer_time?: string;
   reported_notes?: string;
   reported_at?: string;

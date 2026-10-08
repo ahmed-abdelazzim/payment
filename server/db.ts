@@ -488,6 +488,82 @@ export function initSchema(db: DatabaseSync): void {
       FOREIGN KEY (order_id) REFERENCES subscription_orders(id) ON DELETE CASCADE,
       FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
     );
+
+    -- ----------------------------------------------------
+    -- Merchant API Keys (For External Store Integrations)
+    -- ----------------------------------------------------
+    CREATE TABLE IF NOT EXISTS merchant_api_keys (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      key_type TEXT NOT NULL CHECK (key_type IN ('public', 'secret')),
+      key_prefix TEXT NOT NULL,
+      key_value TEXT,
+      key_hash TEXT NOT NULL,
+      key_preview TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('live', 'test')),
+      is_active INTEGER DEFAULT 1,
+      last_used_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_org ON merchant_api_keys(organization_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON merchant_api_keys(key_hash);
+
+    -- ----------------------------------------------------
+    -- Quick Payment Links (For Social / Instant Invoicing)
+    -- ----------------------------------------------------
+    CREATE TABLE IF NOT EXISTS payment_links (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+      currency TEXT DEFAULT 'EGP',
+      is_active INTEGER DEFAULT 1,
+      reusable INTEGER DEFAULT 1,
+      redirect_url TEXT,
+      total_collected_minor INTEGER DEFAULT 0,
+      successful_payments_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_payment_links_org ON payment_links(organization_id);
+
+    -- ----------------------------------------------------
+    -- Checkout Sessions (Customer Payment Flow)
+    -- ----------------------------------------------------
+    CREATE TABLE IF NOT EXISTS checkout_sessions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      order_id TEXT NOT NULL,
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+      currency TEXT DEFAULT 'EGP',
+      customer_name TEXT,
+      customer_phone TEXT,
+      customer_email TEXT,
+      mode TEXT DEFAULT 'live' CHECK (mode IN ('live', 'test')),
+      status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'expired', 'failed')),
+      selected_provider TEXT,
+      return_url TEXT,
+      cancel_url TEXT,
+      webhook_url TEXT,
+      metadata_json TEXT,
+      matched_transaction_id TEXT,
+      customer_reported_ref TEXT,
+      customer_reported_phone TEXT,
+      payment_link_id TEXT,
+      expires_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (matched_transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+      FOREIGN KEY (payment_link_id) REFERENCES payment_links(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_checkout_sessions_org ON checkout_sessions(organization_id, status);
+    CREATE INDEX IF NOT EXISTS idx_checkout_sessions_expires ON checkout_sessions(status, expires_at);
   `);
 
   // Versioned migrations. Must run before any code below reads or writes

@@ -11,6 +11,7 @@ interface HeaderProps {
   onToggleDrawer: () => void;
   onOpenOnboarding: () => void;
   onOpenSubscriptions?: () => void;
+  onOpenIntegrations?: () => void;
   onNavigateHome?: () => void;
   currentTab: string;
   theme?: 'light' | 'dark';
@@ -27,7 +28,9 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleDrawer,
   onOpenOnboarding,
   onOpenSubscriptions,
+  onOpenIntegrations,
   onNavigateHome,
+  currentTab,
   theme,
   onToggleTheme,
 }) => {
@@ -111,6 +114,24 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="material-symbols-outlined text-sm">workspace_premium</span>
               <span className="hidden lg:inline">
                 {language === 'ar' ? 'الباقات' : 'Plans'}
+              </span>
+            </button>
+          )}
+
+          {/* Gateway & Integrations Quick Access */}
+          {onOpenIntegrations && (
+            <button
+              onClick={onOpenIntegrations}
+              title={language === 'ar' ? 'بوابة الدفع والربط بالمتاجر' : 'Payment Gateway & Integrations'}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-label-sm font-bold transition-all active:scale-95 cursor-pointer ${
+                currentTab === 'integrations'
+                  ? 'border-blue-500 bg-blue-500 text-white shadow-xs'
+                  : 'border-outline-variant bg-surface-container-low text-blue-600 dark:text-blue-400 hover:bg-surface-container'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">storefront</span>
+              <span className="hidden lg:inline">
+                {language === 'ar' ? 'بوابة الدفع' : 'Gateway'}
               </span>
             </button>
           )}

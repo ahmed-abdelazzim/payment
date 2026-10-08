@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Transaction, Device, ProviderRail } from '../types';
+import { Transaction, Device, ProviderRail, User, Workspace } from '../types';
 import { apiFetch } from '../api';
 import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUtils';
 import { formatDate } from '../utils/formatters';

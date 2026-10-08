@@ -48,6 +48,12 @@ const VerifyEmailView = React.lazy(() =>
 const InviteAcceptView = React.lazy(() =>
   import('./components/InviteAcceptView').then((m) => ({ default: m.InviteAcceptView }))
 );
+const IntegrationsView = React.lazy(() =>
+  import('./components/IntegrationsView').then((m) => ({ default: m.IntegrationsView }))
+);
+const HostedCheckoutView = React.lazy(() =>
+  import('./components/HostedCheckoutView').then((m) => ({ default: m.HostedCheckoutView }))
+);
 
 export default function App() {
   // Public Routing State
@@ -403,7 +409,20 @@ export default function App() {
     );
   }
 
-  // 6. Protected Client Dashboard at '/app' (and any other authenticated view)
+  // 6. Public Hosted Checkout Session or Payment Link
+  if (currentPath.startsWith('/pay/') || currentPath.startsWith('/checkout/')) {
+    const rawId = currentPath.replace(/^\/(pay|checkout)\//, '').split('/')[0].split('?')[0];
+    return (
+      <Suspense fallback={<ViewLoadingSkeleton />}>
+        <HostedCheckoutView
+          sessionId={rawId}
+          onNavigateHome={() => navigate('/')}
+        />
+      </Suspense>
+    );
+  }
+
+  // 7. Protected Client Dashboard at '/app' (and any other authenticated view)
   if (!hasSession || !currentUser || !workspace) {
     return (
       <AuthView
@@ -434,6 +453,7 @@ export default function App() {
         onToggleDrawer={() => setIsDrawerOpen(true)}
         onOpenOnboarding={() => setIsOnboardingOpen(true)}
         onOpenSubscriptions={() => setCurrentTab('subscriptions')}
+        onOpenIntegrations={() => setCurrentTab('integrations')}
         onNavigateHome={() => navigate('/')}
         currentTab={currentTab}
         theme={theme}
@@ -624,6 +644,15 @@ export default function App() {
         )}
 
         <Suspense fallback={<ViewLoadingSkeleton />}>
+          {currentTab === 'integrations' && (
+            <IntegrationsView
+              workspace={workspace}
+              currentUser={currentUser}
+              language={language}
+              showToast={showToast}
+            />
+          )}
+
           {currentTab === 'audit' && <AuditLogsView language={language} />}
 
           {currentTab === 'settings' && (
