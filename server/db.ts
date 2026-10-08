@@ -564,11 +564,33 @@ export function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_checkout_sessions_org ON checkout_sessions(organization_id, status);
     CREATE INDEX IF NOT EXISTS idx_checkout_sessions_expires ON checkout_sessions(status, expires_at);
+
+    -- Merchant Fraud Blocklist & Watchlist
+    CREATE TABLE IF NOT EXISTS merchant_fraud_blocklist (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      phone_number TEXT NOT NULL,
+      reason TEXT,
+      severity TEXT DEFAULT 'blocked' CHECK (severity IN ('blocked', 'flagged')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      UNIQUE (organization_id, phone_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fraud_blocklist_org_phone ON merchant_fraud_blocklist(organization_id, phone_number);
   `);
 
   // Versioned migrations. Must run before any code below reads or writes
   // money columns by their new names.
   migrateMoneyToMinorUnits(db);
+  try {
+    db.prepare("ALTER TABLE organizations ADD COLUMN wallet_routing_strategy TEXT DEFAULT 'smart_cascading'").run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN whatsapp_business_phone TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE organizations ADD COLUMN whatsapp_auto_message TEXT').run();
+  } catch {}
   try {
     db.prepare('ALTER TABLE users ADD COLUMN is_platform_admin INTEGER DEFAULT 0').run();
   } catch {}

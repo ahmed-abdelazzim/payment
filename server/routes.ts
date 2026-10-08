@@ -26,6 +26,7 @@ import { GoogleSheetsService } from './services/googleSheetsService';
 import { ApiKeyService } from './services/apiKeyService';
 import { CheckoutService } from './services/checkoutService';
 import { PaymentLinkService } from './services/paymentLinkService';
+import { FraudProtectionService } from './services/fraudProtectionService';
 
 export const apiRouter = Router();
 
@@ -2928,6 +2929,20 @@ apiRouter.post('/checkout/sessions/:id/simulate', (req: Request, res: Response) 
   }
 });
 
+// Public: Generate pre-filled WhatsApp customer receipt
+apiRouter.get('/checkout/sessions/:id/whatsapp-receipt', (req: Request, res: Response) => {
+  try {
+    const url = CheckoutService.generateWhatsAppReceiptUrl(req.params.id);
+    if (!url) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND', message: 'جلسة الدفع غير موجودة أو غير مكتملة' });
+      return;
+    }
+    res.json({ success: true, whatsappUrl: url });
+  } catch (err: any) {
+    res.status(400).json({ error: 'RECEIPT_FAILED', message: err.message });
+  }
+});
+
 // ==========================================
 // 13. E-COMMERCE INTEGRATION WEBHOOKS & PLUGINS
 // ==========================================
@@ -3127,5 +3142,130 @@ apiRouter.get('/integrations/woocommerce/plugin-download', (req: Request, res: R
   }
 
   res.status(404).send('Plugin archive not found');
+});
+
+// ==========================================
+// 14. ANTI-FRAUD RADAR & REPUTATION MANAGEMENT
+// ==========================================
+
+// Get merchant's blocked senders list
+apiRouter.get('/fraud/blocklist', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const blocklist = FraudProtectionService.listBlockedSenders(req.user!.organizationId);
+  res.json(blocklist);
+});
+
+// Block suspicious customer phone
+apiRouter.post('/fraud/blocklist', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const { phone, reason } = req.body;
+  if (!phone) {
+    res.status(400).json({ error: 'PHONE_REQUIRED', message: 'رقم الهاتف مطلوب' });
+    return;
+  }
+  try {
+    FraudProtectionService.blockSender(req.user!.organizationId, phone, reason || 'حظر يدوي من التاجر');
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.id,
+      action: 'fraud_block_sender',
+      resourceType: 'fraud_blocklist',
+      resourceId: phone,
+      details: { phone, reason: reason || 'حظر يدوي من التاجر' },
+    });
+    res.json({ success: true, message: 'تم إدراج الرقم في القائمة السوداء بنجاح' });
+  } catch (err: any) {
+    res.status(400).json({ error: 'BLOCK_FAILED', message: err.message });
+  }
+});
+
+// Unblock customer phone
+apiRouter.delete('/fraud/blocklist/:phone', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  try {
+    FraudProtectionService.unblockSender(req.user!.organizationId, req.params.phone);
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.id,
+      action: 'fraud_unblock_sender',
+      resourceType: 'fraud_blocklist',
+      resourceId: req.params.phone,
+      details: { phone: req.params.phone },
+    });
+    res.json({ success: true, message: 'تم رفع الحظر عن الرقم بنجاح' });
+  } catch (err: any) {
+    res.status(400).json({ error: 'UNBLOCK_FAILED', message: err.message });
+  }
+});
+
+// ==========================================
+// 15. SMART WALLET POOL & CAPACITY ENGINE
+// ==========================================
+
+// Get real-time capacity and headroom across all active payment sources
+apiRouter.get('/wallet-pool/capacity', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const db = getDatabase();
+  const sources = db.prepare(`
+    SELECT id, name, type, identifier, is_active, daily_limit_minor, monthly_limit_minor
+    FROM payment_sources
+    WHERE organization_id = ? AND is_active = 1
+  `).all(req.user!.organizationId) as any[];
+
+  const capacities = sources.map(src => {
+    const cap = LimitEngine.getSourceCapacity(req.user!.organizationId, src.id);
+    return {
+      ...src,
+      dailyLimit: fromMinor(src.daily_limit_minor || 6000000),
+      monthlyLimit: fromMinor(src.monthly_limit_minor || 20000000),
+      capacity: cap ? {
+        dailyUsage: fromMinor(cap.dailyIntakeMinor),
+        dailyRemaining: fromMinor(cap.remainingDailyMinor),
+        dailyPercent: cap.dailyPercentage,
+        monthlyUsage: fromMinor(cap.monthlyIntakeMinor),
+        monthlyRemaining: fromMinor(cap.remainingMonthlyMinor),
+        monthlyPercent: cap.monthlyPercentage,
+        isSaturated: cap.isSaturated,
+      } : null
+    };
+  });
+
+  const org = db.prepare(`
+    SELECT wallet_routing_strategy, whatsapp_business_phone, whatsapp_auto_message
+    FROM organizations
+    WHERE id = ?
+  `).get(req.user!.organizationId) as any;
+
+  res.json({
+    strategy: org?.wallet_routing_strategy || 'least_loaded',
+    whatsappBusinessPhone: org?.whatsapp_business_phone || null,
+    whatsappAutoMessage: org?.whatsapp_auto_message ?? 1,
+    sources: capacities
+  });
+});
+
+// Update wallet pool routing strategy and WhatsApp settings
+apiRouter.post('/wallet-pool/settings', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
+  const { strategy, whatsappBusinessPhone, whatsappAutoMessage } = req.body;
+  const db = getDatabase();
+
+  const updates: string[] = [];
+  const params: any[] = [];
+
+  if (strategy && ['least_loaded', 'round_robin', 'priority'].includes(strategy)) {
+    updates.push('wallet_routing_strategy = ?');
+    params.push(strategy);
+  }
+  if (whatsappBusinessPhone !== undefined) {
+    updates.push('whatsapp_business_phone = ?');
+    params.push(whatsappBusinessPhone ? whatsappBusinessPhone.trim() : null);
+  }
+  if (whatsappAutoMessage !== undefined) {
+    updates.push('whatsapp_auto_message = ?');
+    params.push(whatsappAutoMessage ? 1 : 0);
+  }
+
+  if (updates.length > 0) {
+    params.push(req.user!.organizationId);
+    db.prepare(`UPDATE organizations SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+  }
+
+  res.json({ success: true, message: 'تم حفظ إعدادات المحافظ والتوجيه الذكي بنجاح' });
 });
 

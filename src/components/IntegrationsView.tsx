@@ -51,7 +51,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
   language,
   showToast,
 }) => {
-  const [subTab, setSubTab] = useState<'setup' | 'plugins' | 'links' | 'simulator' | 'logs'>('setup');
+  const [subTab, setSubTab] = useState<'setup' | 'plugins' | 'widgets' | 'routing' | 'links' | 'simulator' | 'logs'>('setup');
   const [setupData, setSetupData] = useState<QuickSetupData | null>(null);
   const [paymentLinks, setPaymentLinks] = useState<PaymentLinkItem[]>([]);
   const [webhookLogs, setWebhookLogs] = useState<WebhookDeliveryItem[]>([]);
@@ -83,6 +83,35 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
   const [activeSimSession, setActiveSimSession] = useState<any | null>(null);
   const [isCreatingSim, setIsCreatingSim] = useState<boolean>(false);
   const [isSimulatingPayment, setIsSimulatingPayment] = useState<boolean>(false);
+
+  // Widget Studio State
+  const [widgetBtnText, setWidgetBtnText] = useState<string>('ادفع فوراً عبر فودافون كاش أو إنستاباي');
+  const [widgetTheme, setWidgetTheme] = useState<'emerald' | 'blue' | 'purple' | 'dark'>('emerald');
+  const [widgetSize, setWidgetSize] = useState<'sm' | 'md' | 'lg'>('md');
+  const [widgetAmount, setWidgetAmount] = useState<string>('250.00');
+  const [widgetShowBadge, setWidgetShowBadge] = useState<boolean>(true);
+
+  // Smart Routing & Anti-Fraud Radar State
+  const [walletCapacityData, setWalletCapacityData] = useState<{
+    strategy: string;
+    whatsappBusinessPhone: string | null;
+    whatsappAutoMessage: number;
+    sources: any[];
+  } | null>(null);
+  const [selectedStrategy, setSelectedStrategy] = useState<string>('least_loaded');
+  const [waPhoneInput, setWaPhoneInput] = useState<string>('');
+  const [waAutoMsg, setWaAutoMsg] = useState<boolean>(true);
+  const [isSavingPool, setIsSavingPool] = useState<boolean>(false);
+
+  const [blockedSenders, setBlockedSenders] = useState<Array<{
+    id: string;
+    sender_phone: string;
+    reason: string;
+    created_at: string;
+  }>>([]);
+  const [blockPhoneInput, setBlockPhoneInput] = useState<string>('');
+  const [blockReasonInput, setBlockReasonInput] = useState<string>('');
+  const [isBlocking, setIsBlocking] = useState<boolean>(false);
 
   // Fetch Quick Setup Data
   const loadSetupData = useCallback(async () => {
@@ -119,6 +148,31 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     } catch {}
   }, []);
 
+  // Fetch Smart Wallet Pool & Limits
+  const loadWalletPool = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/v1/wallet-pool/capacity');
+      if (res.ok) {
+        const data = await res.json();
+        setWalletCapacityData(data);
+        setSelectedStrategy(data.strategy || 'least_loaded');
+        setWaPhoneInput(data.whatsappBusinessPhone || '');
+        setWaAutoMsg(Boolean(data.whatsappAutoMessage));
+      }
+    } catch {}
+  }, []);
+
+  // Fetch Fraud Blocklist
+  const loadBlocklist = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/v1/fraud/blocklist');
+      if (res.ok) {
+        const data = await res.json();
+        setBlockedSenders(data);
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     loadSetupData();
   }, [loadSetupData]);
@@ -126,7 +180,11 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
   useEffect(() => {
     if (subTab === 'links') loadPaymentLinks();
     if (subTab === 'logs') loadWebhookLogs();
-  }, [subTab, loadPaymentLinks, loadWebhookLogs]);
+    if (subTab === 'routing') {
+      loadWalletPool();
+      loadBlocklist();
+    }
+  }, [subTab, loadPaymentLinks, loadWebhookLogs, loadWalletPool, loadBlocklist]);
 
   const copyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -282,6 +340,74 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     }
   };
 
+  const handleSavePoolSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingPool(true);
+    try {
+      const res = await apiFetch('/api/v1/wallet-pool/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          strategy: selectedStrategy,
+          whatsappBusinessPhone: waPhoneInput.trim() || null,
+          whatsappAutoMessage: waAutoMsg ? 1 : 0,
+        }),
+      });
+      if (res.ok) {
+        showToast(language === 'ar' ? 'تم حفظ إعدادات المحافظ والتوجيه الذكي بنجاح!' : 'Smart wallet routing settings saved!');
+        loadWalletPool();
+      } else {
+        const err = await res.json();
+        showToast(err.message || 'فشل حفظ الإعدادات');
+      }
+    } catch {
+      showToast('تعذر حفظ إعدادات المحافظ');
+    } finally {
+      setIsSavingPool(false);
+    }
+  };
+
+  const handleBlockSender = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!blockPhoneInput) return;
+    setIsBlocking(true);
+    try {
+      const res = await apiFetch('/api/v1/fraud/blocklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: blockPhoneInput.trim(),
+          reason: blockReasonInput.trim() || 'حظر يدوي من التاجر',
+        }),
+      });
+      if (res.ok) {
+        showToast(language === 'ar' ? 'تم إدراج الرقم في القائمة السوداء بنجاح!' : 'Phone added to blacklist successfully!');
+        setBlockPhoneInput('');
+        setBlockReasonInput('');
+        loadBlocklist();
+      } else {
+        const err = await res.json();
+        showToast(err.message || 'فشل إدراج الرقم');
+      }
+    } catch {
+      showToast('تعذر حظر الرقم');
+    } finally {
+      setIsBlocking(false);
+    }
+  };
+
+  const handleUnblockSender = async (phone: string) => {
+    try {
+      const res = await apiFetch(`/api/v1/fraud/blocklist/${encodeURIComponent(phone)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        showToast(language === 'ar' ? 'تم رفع الحظر بنجاح' : 'Sender unblocked successfully');
+        loadBlocklist();
+      }
+    } catch {}
+  };
+
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const currentKeys = isTestMode ? setupData?.keys.test : setupData?.keys.live;
 
@@ -363,6 +489,30 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
         >
           <span className="material-symbols-outlined text-base">extension</span>
           <span>{language === 'ar' ? 'إضافات المتاجر (WooCommerce / Shopify / Easy Orders)' : 'Store Plugins & SDK'}</span>
+        </button>
+
+        <button
+          onClick={() => setSubTab('widgets')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
+            subTab === 'widgets'
+              ? 'bg-primary text-on-primary shadow-md shadow-primary/20'
+              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
+          }`}
+        >
+          <span className="material-symbols-outlined text-base">widgets</span>
+          <span>{language === 'ar' ? 'استوديو أزرار الدفع (Widget Studio)' : 'Widget Studio'}</span>
+        </button>
+
+        <button
+          onClick={() => setSubTab('routing')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
+            subTab === 'routing'
+              ? 'bg-primary text-on-primary shadow-md shadow-primary/20'
+              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
+          }`}
+        >
+          <span className="material-symbols-outlined text-base">shield</span>
+          <span>{language === 'ar' ? 'درع الحماية والتوزيع الذكي (Anti-Fraud & Limits)' : 'Anti-Fraud & Limits'}</span>
         </button>
 
         <button
@@ -1353,6 +1503,502 @@ function payWithSarraf() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* SUB-TAB 6: WIDGET & BUTTON STUDIO */}
+      {/* ------------------------------------------------------------- */}
+      {subTab === 'widgets' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Customizer Controls */}
+          <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md space-y-5">
+            <div>
+              <h2 className="text-base font-bold text-on-surface flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary">palette</span>
+                <span>{language === 'ar' ? 'تخصيص زر الدفع المباشر' : 'Customize Pay Button'}</span>
+              </h2>
+              <p className="text-xs text-on-surface-variant mt-1">
+                {language === 'ar'
+                  ? 'صمم زراً تفاعلياً أنيقاً يمكن تضمينه في أي موقع أو صفحة هبوط بنقرة واحدة.'
+                  : 'Design an interactive payment button to embed anywhere in 1 click.'}
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1.5">
+                  {language === 'ar' ? 'النص المكتوب على الزر:' : 'Button Text:'}
+                </label>
+                <input
+                  type="text"
+                  value={widgetBtnText}
+                  onChange={(e) => setWidgetBtnText(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant text-xs text-on-surface focus:outline-none focus:border-primary"
+                  placeholder="ادفع فوراً عبر فودافون كاش أو إنستاباي"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1.5">
+                  {language === 'ar' ? 'المظهر واللون (Theme):' : 'Theme Color:'}
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'emerald', label: 'الزمردي (Emerald)', color: 'bg-emerald-600' },
+                    { id: 'blue', label: 'الأزرق البنكي (Navy)', color: 'bg-blue-600' },
+                    { id: 'purple', label: 'إنستاباي موف (Purple)', color: 'bg-purple-600' },
+                    { id: 'dark', label: 'الداكن الملكي (Obsidian)', color: 'bg-slate-900' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setWidgetTheme(t.id as any)}
+                      className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                        widgetTheme === t.id
+                          ? 'border-primary bg-primary/10 text-on-surface'
+                          : 'border-outline-variant bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      <span className={`w-3.5 h-3.5 rounded-full ${t.color}`} />
+                      <span className="truncate">{t.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1.5">
+                  {language === 'ar' ? 'حجم الزر:' : 'Button Size:'}
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: 'sm', label: language === 'ar' ? 'صغير' : 'Small' },
+                    { id: 'md', label: language === 'ar' ? 'متوسط' : 'Medium' },
+                    { id: 'lg', label: language === 'ar' ? 'عريض' : 'Large' },
+                  ].map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setWidgetSize(s.id as any)}
+                      className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer text-center ${
+                        widgetSize === s.id
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-outline-variant bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1.5">
+                  {language === 'ar' ? 'المبلغ التقديري (ج.م):' : 'Fixed Amount (EGP):'}
+                </label>
+                <input
+                  type="number"
+                  value={widgetAmount}
+                  onChange={(e) => setWidgetAmount(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant text-xs text-on-surface focus:outline-none focus:border-primary font-mono"
+                  placeholder="250.00"
+                />
+              </div>
+
+              <div className="pt-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={widgetShowBadge}
+                    onChange={(e) => setWidgetShowBadge(e.target.checked)}
+                    className="w-4 h-4 rounded text-primary focus:ring-primary"
+                  />
+                  <span className="text-xs text-on-surface font-medium">
+                    {language === 'ar' ? 'إظهار شارة الأمان وتأكيد صرّاف الآلي أسفل الزر' : 'Display Sarraf Verified Security badge'}
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive Preview & Embed Code Snippets */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Live Interactive Button Preview Card */}
+            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
+                <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
+                  <span className="material-symbols-outlined text-emerald-500">visibility</span>
+                  <span>{language === 'ar' ? 'المعاينة الحية التفاعلية' : 'Live Interactive Preview'}</span>
+                </h3>
+                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 font-bold">
+                  {language === 'ar' ? 'جاهز للاختبار' : 'Interactive'}
+                </span>
+              </div>
+
+              <div className="p-8 rounded-2xl bg-surface-container-low/70 border border-outline-variant/60 flex flex-col items-center justify-center min-h-[160px] space-y-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    showToast(language === 'ar' ? 'تم الضغط على زر الدفع! يفتح نافذة بوب أب فورية.' : 'Pay button clicked! Opens popup checkout.');
+                  }}
+                  className={`flex items-center justify-center gap-2.5 font-bold rounded-2xl transition-all shadow-lg cursor-pointer active:scale-95 ${
+                    widgetSize === 'sm' ? 'py-2 px-4 text-xs' : widgetSize === 'lg' ? 'py-4 px-8 text-base w-full max-w-sm' : 'py-3 px-6 text-sm'
+                  } ${
+                    widgetTheme === 'emerald'
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+                      : widgetTheme === 'blue'
+                      ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/30'
+                      : widgetTheme === 'purple'
+                      ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/30'
+                      : 'bg-slate-900 hover:bg-slate-800 text-white border border-slate-700 shadow-slate-900/40'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-lg">account_balance_wallet</span>
+                  <span>{widgetBtnText}</span>
+                  <span className="text-xs opacity-90 font-mono">({widgetAmount} ج.م)</span>
+                </button>
+
+                {widgetShowBadge && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-on-surface-variant font-medium">
+                    <span className="material-symbols-outlined text-xs text-emerald-500">verified</span>
+                    <span>{language === 'ar' ? 'بوابة دفع صرّاف الآلية · فودافون كاش وإنستاباي' : 'Powered by Sarraf Gateway · Instant Verification'}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Embed Code Snippet Card */}
+            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
+                    <span className="material-symbols-outlined text-primary">code</span>
+                    <span>{language === 'ar' ? 'كود التضمين في موقعك (1-Click Embed HTML)' : 'Embed Code Snippet'}</span>
+                  </h3>
+                  <p className="text-xs text-on-surface-variant mt-0.5">
+                    {language === 'ar'
+                      ? 'انسخ هذا الكود والصقه مباشرة في أي صفحة HTML أو ووردبريس أو ويب فلو.'
+                      : 'Copy and paste directly into any HTML page, WordPress, or Webflow.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const snippet = `<!-- Sarraf 1-Click Pay Button -->
+<button
+  type="button"
+  onclick="window.open('${currentOrigin}/checkout/pay?amount=${widgetAmount}&key=${currentKeys?.publicKey || 'pk_live_...'}', 'sarraf_checkout', 'width=460,height=740,scrollbars=no')"
+  style="display:inline-flex;align-items:center;gap:8px;padding:${widgetSize === 'sm' ? '8px 16px' : widgetSize === 'lg' ? '16px 32px' : '12px 24px'};border-radius:14px;background-color:${widgetTheme === 'emerald' ? '#059669' : widgetTheme === 'blue' ? '#2563eb' : widgetTheme === 'purple' ? '#7c3aed' : '#0f172a'};color:#ffffff;font-family:sans-serif;font-weight:700;font-size:${widgetSize === 'sm' ? '13px' : widgetSize === 'lg' ? '16px' : '14px'};border:none;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.15);"
+>
+  ${widgetBtnText} (${widgetAmount} EGP)
+</button>`;
+                    copyText(snippet, 'كود زر الدفع');
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary text-on-primary text-xs font-bold cursor-pointer hover:bg-primary/90"
+                >
+                  <span className="material-symbols-outlined text-sm">content_copy</span>
+                  <span>{language === 'ar' ? 'نسخ كود الزر' : 'Copy Embed Code'}</span>
+                </button>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant font-mono text-xs text-on-surface overflow-x-auto whitespace-pre leading-relaxed" dir="ltr">
+{`<!-- Sarraf 1-Click Pay Button -->
+<button
+  type="button"
+  onclick="window.open('${currentOrigin}/checkout/pay?amount=${widgetAmount}&key=${currentKeys?.publicKey || 'pk_live_...'}', 'sarraf_checkout', 'width=460,height=740,scrollbars=no')"
+  style="display:inline-flex;align-items:center;gap:8px;padding:${widgetSize === 'sm' ? '8px 16px' : widgetSize === 'lg' ? '16px 32px' : '12px 24px'};border-radius:14px;background-color:${widgetTheme === 'emerald' ? '#059669' : widgetTheme === 'blue' ? '#2563eb' : widgetTheme === 'purple' ? '#7c3aed' : '#0f172a'};color:#ffffff;font-family:sans-serif;font-weight:700;font-size:${widgetSize === 'sm' ? '13px' : widgetSize === 'lg' ? '16px' : '14px'};border:none;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.15);"
+>
+  ${widgetBtnText} (${widgetAmount} EGP)
+</button>`}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* SUB-TAB 7: ANTI-FRAUD RADAR & SMART WALLET CASCADING */}
+      {/* ------------------------------------------------------------- */}
+      {subTab === 'routing' && (
+        <div className="space-y-6">
+          {/* Smart Wallet Quota Balancing & Cascading Pool Card */}
+          <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-outline-variant">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-emerald-500">alt_route</span>
+                  <h2 className="text-base font-bold text-on-surface">
+                    {language === 'ar' ? 'التوجيه الذكي وموازنة حدود البنك المركزي (CBE Limits Engine)' : 'Smart Wallet Cascading & CBE Quota Engine'}
+                  </h2>
+                </div>
+                <p className="text-xs text-on-surface-variant mt-1">
+                  {language === 'ar'
+                    ? 'يحسب النظام استيعاب محافظك لحظة بلحظة، ويوجه العميل تلقائياً للمحفظة الأقل حملاً، ويتحول تلقائياً بعيداً عن المحافظ التي قاربت الحد اليومي (60,000 ج.م) منعاً لأي فشل في الدفع.'
+                    : 'Real-time headroom monitoring across your active wallets. Auto-cascades away from saturated wallets (>=98%) to ensure zero bounced payments.'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={loadWalletPool}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-xs font-bold text-on-surface cursor-pointer shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm">refresh</span>
+                <span>{language === 'ar' ? 'تحديث السعات' : 'Refresh'}</span>
+              </button>
+            </div>
+
+            {/* Routing Strategy & WhatsApp Settings Form */}
+            <form onSubmit={handleSavePoolSettings} className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl bg-surface-container-low/70 border border-outline-variant/60">
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1.5">
+                  {language === 'ar' ? 'استراتيجية التوجيه الآلي:' : 'Cascading Strategy:'}
+                </label>
+                <select
+                  value={selectedStrategy}
+                  onChange={(e) => setSelectedStrategy(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant text-xs text-on-surface font-semibold focus:outline-none focus:border-primary"
+                >
+                  <option value="least_loaded">
+                    {language === 'ar' ? '🟢 الأقل حملاً ومعدل فراغ أعلى (موصى به)' : 'Least Loaded Headroom (Recommended)'}
+                  </option>
+                  <option value="round_robin">
+                    {language === 'ar' ? '🔄 توزيع دوري متوازن (Round Robin)' : 'Round Robin'}
+                  </option>
+                  <option value="priority">
+                    {language === 'ar' ? '⚡ أولوية الترتيب حتى الإشباع (Priority Spillover)' : 'Priority Spillover'}
+                  </option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1.5">
+                  {language === 'ar' ? 'رقم واتساب المتجر لإرسال الإيصالات:' : 'WhatsApp Business Phone:'}
+                </label>
+                <input
+                  type="text"
+                  value={waPhoneInput}
+                  onChange={(e) => setWaPhoneInput(e.target.value)}
+                  placeholder="2010XXXXXXXX"
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant text-xs text-on-surface font-mono focus:outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="flex flex-col justify-end">
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="checkbox"
+                    id="waAutoMsg"
+                    checked={waAutoMsg}
+                    onChange={(e) => setWaAutoMsg(e.target.checked)}
+                    className="w-4 h-4 rounded text-primary focus:ring-primary"
+                  />
+                  <label htmlFor="waAutoMsg" className="text-xs text-on-surface font-medium cursor-pointer">
+                    {language === 'ar' ? 'تجهيز إيصال فوري عبر واتساب للعميل' : 'Enable 1-Click WhatsApp Receipt'}
+                  </label>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isSavingPool}
+                  className="w-full py-2 px-4 rounded-xl bg-primary text-on-primary font-bold text-xs transition-all cursor-pointer hover:bg-primary/90 disabled:opacity-50"
+                >
+                  {isSavingPool ? (language === 'ar' ? 'جاري الحفظ...' : 'Saving...') : (language === 'ar' ? 'حفظ إعدادات التوجيه' : 'Save Routing Settings')}
+                </button>
+              </div>
+            </form>
+
+            {/* Active Wallets Capacity Grid */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
+                {language === 'ar' ? 'سعة المحافظ اللحظية ونسب الاستهلاك اليومي:' : 'Real-Time Wallet Capacity & Daily Quota:'}
+              </h3>
+
+              {walletCapacityData?.sources && walletCapacityData.sources.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {walletCapacityData.sources.map((src: any) => {
+                    const cap = src.capacity;
+                    const dailyPct = cap ? cap.dailyPercent : 0;
+                    const isSaturated = cap ? cap.isSaturated : false;
+                    const isNearLimit = dailyPct >= 80;
+
+                    return (
+                      <div
+                        key={src.id}
+                        className={`p-4 rounded-2xl border transition-all ${
+                          isSaturated
+                            ? 'bg-red-500/5 border-red-500/30'
+                            : isNearLimit
+                            ? 'bg-amber-500/5 border-amber-500/30'
+                            : 'bg-surface-container-low border-outline-variant/70'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-bold text-on-surface truncate">{src.name}</span>
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                            isSaturated
+                              ? 'bg-red-500/15 text-red-600'
+                              : isNearLimit
+                              ? 'bg-amber-500/15 text-amber-600'
+                              : 'bg-emerald-500/15 text-emerald-600'
+                          }`}>
+                            {isSaturated
+                              ? (language === 'ar' ? 'مشبع (محول تلقائياً)' : 'Saturated')
+                              : isNearLimit
+                              ? (language === 'ar' ? 'حمل مرتفع' : 'High Load')
+                              : (language === 'ar' ? 'نشط ومتاح' : 'Healthy')}
+                          </span>
+                        </div>
+
+                        <div className="font-mono text-sm font-black text-on-surface mb-3" dir="ltr">
+                          {src.identifier}
+                        </div>
+
+                        {/* Daily Progress Bar */}
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-[11px] text-on-surface-variant font-medium">
+                            <span>{language === 'ar' ? 'الاستهلاك اليومي:' : 'Daily Intake:'}</span>
+                            <span className="font-mono font-bold">
+                              {cap ? `${cap.dailyUsage.toFixed(0)} / ${src.dailyLimit} ج.م` : '0 ج.م'}
+                            </span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-surface-container-highest overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                isSaturated
+                                  ? 'bg-red-500'
+                                  : isNearLimit
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                              }`}
+                              style={{ width: `${Math.min(dailyPct, 100)}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[10px] text-on-surface-variant">
+                            <span>{dailyPct}% {language === 'ar' ? 'مستخدم' : 'used'}</span>
+                            <span className="text-emerald-500 font-semibold">
+                              {cap ? `${cap.dailyRemaining.toFixed(0)} ج.م متاح` : ''}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-on-surface-variant text-xs bg-surface-container-low rounded-2xl">
+                  {language === 'ar' ? 'لا توجد محافظ دفع مفعلة حالياً.' : 'No active payment wallets found.'}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Anti-Fraud Radar & Reputation Blacklist Card */}
+          <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md space-y-6">
+            <div className="flex items-center gap-2 pb-3 border-b border-outline-variant">
+              <span className="material-symbols-outlined text-red-500">security</span>
+              <div>
+                <h2 className="text-base font-bold text-on-surface">
+                  {language === 'ar' ? 'رادار مكافحة الاحتيال والقائمة السوداء (Anti-Fraud Radar)' : 'Anti-Fraud Radar & Blacklist'}
+                </h2>
+                <p className="text-xs text-on-surface-variant mt-0.5">
+                  {language === 'ar'
+                    ? 'حماية متقدمة من محاولات إرسال إشعارات وهمية أو تكرار الادعاء بالدفع. احظر أي رقم هاتف مشبوه بنقرة واحدة.'
+                    : 'Prevent fraudulent claims and fake transfer notices with instant merchant phone-level blocking.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Block Sender Form */}
+            <form onSubmit={handleBlockSender} className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-surface-container-low/70 border border-outline-variant/60">
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1">
+                  {language === 'ar' ? 'رقم هاتف العميل المشبوه:' : 'Customer Mobile to Block:'}
+                </label>
+                <input
+                  type="text"
+                  value={blockPhoneInput}
+                  onChange={(e) => setBlockPhoneInput(e.target.value)}
+                  placeholder="010XXXXXXXX"
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant text-xs text-on-surface font-mono focus:outline-none focus:border-red-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-on-surface block mb-1">
+                  {language === 'ar' ? 'سبب الحظر:' : 'Reason for Blocking:'}
+                </label>
+                <input
+                  type="text"
+                  value={blockReasonInput}
+                  onChange={(e) => setBlockReasonInput(e.target.value)}
+                  placeholder={language === 'ar' ? 'ادعاء دفع وهمي / رسائل مزورة' : 'Fake transfer claim'}
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant text-xs text-on-surface focus:outline-none focus:border-red-500"
+                />
+              </div>
+
+              <div className="flex items-end">
+                <button
+                  type="submit"
+                  disabled={isBlocking || !blockPhoneInput}
+                  className="w-full py-2 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-md shadow-red-600/20"
+                >
+                  <span className="material-symbols-outlined text-sm">block</span>
+                  <span>{isBlocking ? (language === 'ar' ? 'جاري الحظر...' : 'Blocking...') : (language === 'ar' ? 'إدراج في القائمة السوداء' : 'Block Sender')}</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Blocked Senders Table */}
+            <div>
+              <h3 className="text-xs font-bold text-on-surface-variant uppercase tracking-wider mb-2">
+                {language === 'ar' ? 'الأرقام المحظورة حالياً:' : 'Currently Blacklisted Phone Numbers:'}
+              </h3>
+
+              {blockedSenders.length === 0 ? (
+                <div className="p-8 text-center text-on-surface-variant text-xs bg-surface-container-low rounded-2xl">
+                  {language === 'ar' ? 'القائمة السوداء نظيفة، لم يتم حظر أي رقم بعد.' : 'No blocked senders. Your store reputation is clean.'}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right rtl:text-right ltr:text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-outline-variant text-on-surface-variant font-bold">
+                        <th className="py-2.5 px-3">{language === 'ar' ? 'رقم الهاتف' : 'Phone'}</th>
+                        <th className="py-2.5 px-3">{language === 'ar' ? 'السبب' : 'Reason'}</th>
+                        <th className="py-2.5 px-3">{language === 'ar' ? 'تاريخ الحظر' : 'Blocked At'}</th>
+                        <th className="py-2.5 px-3">{language === 'ar' ? 'الإجراء' : 'Action'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-outline-variant/60">
+                      {blockedSenders.map((b) => (
+                        <tr key={b.id} className="hover:bg-surface-container-low/50">
+                          <td className="py-2.5 px-3 font-mono font-bold text-red-500" dir="ltr">
+                            {b.sender_phone}
+                          </td>
+                          <td className="py-2.5 px-3 text-on-surface">
+                            {b.reason}
+                          </td>
+                          <td className="py-2.5 px-3 text-on-surface-variant">
+                            {new Date(b.created_at).toLocaleDateString(language === 'ar' ? 'ar-EG' : 'en-US')}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <button
+                              type="button"
+                              onClick={() => handleUnblockSender(b.sender_phone)}
+                              className="px-2.5 py-1 rounded-lg bg-surface-container hover:bg-surface-container-high text-xs font-semibold text-on-surface cursor-pointer"
+                            >
+                              {language === 'ar' ? 'إلغاء الحظر' : 'Unblock'}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

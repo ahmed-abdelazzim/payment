@@ -253,6 +253,25 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
             </div>
           </div>
 
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await fetch(`/api/v1/checkout/sessions/${encodeURIComponent(session.id)}/whatsapp-receipt`);
+                const data = await res.json();
+                if (data.whatsappUrl) {
+                  window.open(data.whatsappUrl, '_blank');
+                }
+              } catch (e) {
+                console.error(e);
+              }
+            }}
+            className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-2xl bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-500/40 font-bold text-xs transition-all cursor-pointer mb-3 shadow-sm"
+          >
+            <span className="material-symbols-outlined text-base">chat</span>
+            <span>{language === 'ar' ? 'مشاركة إيصال الدفع عبر واتساب' : 'Share Receipt via WhatsApp'}</span>
+          </button>
+
           {session.returnUrl ? (
             <div className="space-y-3">
               <a
@@ -506,6 +525,31 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
                     : 'Wait a few seconds, the system will detect your transfer and auto-confirm your order!'}
                 </span>
               </div>
+            </div>
+
+            {/* InstaPay 1-Tap Mobile Deep Link */}
+            {selectedRail.provider === 'instapay' && (
+              <div className="pt-1">
+                <a
+                  href="instapay://"
+                  onClick={() => {
+                    copyToClipboard(selectedRail.walletNumber, 'number');
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs transition-all shadow-lg shadow-purple-600/30 cursor-pointer active:scale-98"
+                >
+                  <span className="material-symbols-outlined text-sm">open_in_new</span>
+                  <span>{language === 'ar' ? 'فتح تطبيق إنستاباي بنقرة واحدة للدفع' : 'Open InstaPay App (1-Tap)'}</span>
+                </a>
+                <p className="text-[10px] text-center text-slate-400 mt-1.5">
+                  {language === 'ar' ? '💡 يتم نسخ عنوان الدفع تلقائياً إلى الحافظة عند الضغط لسهولة اللصق في إنستاباي' : '💡 Payment address is automatically copied to clipboard for quick pasting'}
+                </p>
+              </div>
+            )}
+
+            {/* CBE Security & Limit Guard Badge */}
+            <div className="flex items-center justify-center gap-1.5 py-1 px-3 rounded-full bg-slate-950 border border-emerald-500/20 text-[10px] text-emerald-400 mx-auto w-fit">
+              <span className="material-symbols-outlined text-xs">verified_user</span>
+              <span>{language === 'ar' ? 'محفظة مفحوصة ومؤمنة بضوابط البنك المركزي المصري' : 'Verified wallet compliant with CBE guidelines'}</span>
             </div>
 
             {/* Live Polling Radar */}

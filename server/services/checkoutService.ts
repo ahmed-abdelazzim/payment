@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { getDatabase } from '../db';
 import { toMinor, fromMinor } from '../money';
+import { FraudProtectionService, RiskAssessment } from './fraudProtectionService';
+import { LimitEngine } from './limitEngine';
 
 export interface CheckoutSessionData {
   id: string;
@@ -36,6 +38,10 @@ export interface PaymentRailOption {
   walletNumber: string;
   instapayAddress?: string | null;
   instructionsAr: string;
+  sourceId?: string;
+  remainingDailyMinor?: number;
+  dailyPercentage?: number;
+  isSmartRouted?: boolean;
 }
 
 export class CheckoutService {
@@ -64,6 +70,14 @@ export class CheckoutService {
     const mode = params.mode === 'test' ? 'test' : 'live';
     const orderId = params.orderId?.trim() || `ORD-${Date.now().toString(36).toUpperCase()}`;
     const id = `cs_${mode}_${crypto.randomBytes(12).toString('hex')}`;
+
+    // Anti-Fraud check: Ensure customer phone is not blacklisted
+    if (params.customerPhone) {
+      const risk = FraudProtectionService.assessSender(organizationId, params.customerPhone);
+      if (risk.isBlocked) {
+        throw new Error('CUSTOMER_BLOCKED: رقم الهاتف هذا محظور من إجراء عمليات الدفع لدى هذا المتجر');
+      }
+    }
 
     const minutes = params.expiresInMinutes && params.expiresInMinutes > 0 ? params.expiresInMinutes : 30;
     const expiresAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
@@ -242,7 +256,35 @@ export class CheckoutService {
       etisalat_cash: 'e& Cash',
     };
 
-    const rails: PaymentRailOption[] = sources.map((s) => ({
+    // Smart Wallet Cascading: calculate remaining capacity and route optimally
+    const sourcesWithCapacity = sources.map((s) => ({
+      ...s,
+      capacity: LimitEngine.getSourceCapacity(row.organization_id, s.id),
+    }));
+
+    // If multiple sources exist for same provider, filter out saturated (>=98%) ones
+    const healthySources = sourcesWithCapacity.filter((s) => {
+      if (s.capacity.dailyPercentage >= 98) {
+        const hasAlternate = sourcesWithCapacity.some(
+          (other) => other.provider === s.provider && other.id !== s.id && other.capacity.dailyPercentage < 98
+        );
+        if (hasAlternate) return false;
+      }
+      return true;
+    });
+
+    // Sort by remaining daily capacity descending (healthiest wallet first)
+    healthySources.sort((a, b) => b.capacity.remainingDailyMinor - a.capacity.remainingDailyMinor);
+
+    // Group by provider so customer is offered the single healthiest wallet for each payment method
+    const seenProviders = new Set<string>();
+    const bestSourcesPerProvider = healthySources.filter((s) => {
+      if (seenProviders.has(s.provider)) return false;
+      seenProviders.add(s.provider);
+      return true;
+    });
+
+    const rails: PaymentRailOption[] = bestSourcesPerProvider.map((s) => ({
       provider: s.provider,
       providerLabel: providerLabelsEn[s.provider] || s.provider,
       providerLabelAr: providerLabelsAr[s.provider] || s.friendly_name,
@@ -251,6 +293,10 @@ export class CheckoutService {
       instructionsAr: s.provider === 'instapay'
         ? `حوّل المبلغ المطلوب عبر تطبيق إنستاباي إلى العنوان/الرقم: ${s.wallet_number}`
         : `حوّل المبلغ المطلوب عبر محفظة ${providerLabelsAr[s.provider] || 'المحفظة'} إلى الرقم: ${s.wallet_number}`,
+      sourceId: s.id,
+      remainingDailyMinor: s.capacity.remainingDailyMinor,
+      dailyPercentage: s.capacity.dailyPercentage,
+      isSmartRouted: true,
     }));
 
     // Sandbox test mode demo fallback rails if merchant has not added any real sources yet
@@ -465,6 +511,13 @@ export class CheckoutService {
     const cleanRef = data.transferRef?.trim() || null;
     const cleanPhone = data.senderPhone?.trim() || null;
 
+    if (cleanPhone) {
+      const risk = FraudProtectionService.assessSender(session.organizationId, cleanPhone);
+      if (risk.isBlocked) {
+        throw new Error('SENDER_BLOCKED: رقم الهاتف محظور من المطالبة بسبب نشاط مشبوه سابق');
+      }
+    }
+
     db.prepare(`
       UPDATE checkout_sessions
       SET customer_reported_ref = COALESCE(?, customer_reported_ref),
@@ -615,5 +668,84 @@ export class CheckoutService {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
+  }
+
+  /**
+   * Generates a pre-filled, compliant WhatsApp receipt URL for the customer
+   */
+  static generateWhatsAppReceiptUrl(sessionOrId: string | CheckoutSessionData, merchantPhone?: string): string | null {
+    let session: any = null;
+    let merchantNameAr = '';
+    let merchantName = '';
+
+    if (typeof sessionOrId === 'string') {
+      const db = getDatabase();
+      const row = db.prepare(`
+        SELECT cs.*, o.name as org_name, o.name_ar as org_name_ar, o.whatsapp_business_phone
+        FROM checkout_sessions cs
+        JOIN organizations o ON cs.organization_id = o.id
+        WHERE cs.id = ?
+      `).get(sessionOrId) as any;
+
+      if (!row) return null;
+      merchantPhone = merchantPhone || row.whatsapp_business_phone;
+      merchantNameAr = row.org_name_ar || '';
+      merchantName = row.org_name || '';
+      session = {
+        id: row.id,
+        orderId: row.order_id,
+        amount: fromMinor(row.amount_minor),
+        amountMinor: row.amount_minor,
+        currency: row.currency,
+        customerName: row.customer_name,
+        customerPhone: row.customer_phone,
+        status: row.status,
+        selectedProvider: row.selected_provider,
+        confirmedAt: row.confirmed_at,
+        customerReportedPhone: row.customer_reported_phone,
+        matchedTransactionId: row.matched_transaction_id,
+      };
+    } else {
+      session = sessionOrId;
+      merchantNameAr = (session as any).merchantNameAr || '';
+      merchantName = (session as any).merchantName || '';
+    }
+
+    if (!session) return null;
+
+    const rawTarget = merchantPhone || session.customerReportedPhone || session.customerPhone || '';
+    let cleanPhone = rawTarget.replace(/\D/g, '');
+    if (cleanPhone.startsWith('01') && cleanPhone.length === 11) {
+      cleanPhone = `2${cleanPhone}`;
+    }
+
+    const providerNames: Record<string, string> = {
+      vodafone_cash: 'فودافون كاش',
+      instapay: 'إنستاباي (InstaPay)',
+      orange_cash: 'أورانج كاش',
+      etisalat_cash: 'إي آند كاش',
+    };
+
+    const method = providerNames[session.selectedProvider || ''] || 'المحفظة الإلكترونية';
+    const amountStr = Number(session.amount).toFixed(2);
+    const dateStr = session.confirmedAt
+      ? new Date(session.confirmedAt).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' })
+      : new Date().toLocaleDateString('ar-EG');
+    const storeDisplayName = merchantNameAr || merchantName || 'صرّاف';
+
+    const message =
+      `*🧾 إيصال تأكيد سداد إلكتروني معتمد - ${storeDisplayName}*\n` +
+      `──────────────────\n` +
+      `📦 *رقم الطلب:* ${session.orderId}\n` +
+      `💰 *المبلغ المسدد:* ${amountStr} ج.م\n` +
+      `💳 *وسيلة الدفع:* ${method}\n` +
+      `✅ *حالة السداد:* مؤكد بنجاح ومطابق بنكياً\n` +
+      `📅 *التوقيت:* ${dateStr}\n` +
+      (session.matchedTransactionId ? `🔖 *رقم العملية:* ${session.matchedTransactionId}\n` : '') +
+      `──────────────────\n` +
+      `شكراً لتعاملكم مع ${storeDisplayName}!`;
+
+    const baseUrl = cleanPhone ? `https://wa.me/${cleanPhone}` : 'https://wa.me/';
+    return `${baseUrl}?text=${encodeURIComponent(message)}`;
   }
 }

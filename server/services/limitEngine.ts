@@ -373,4 +373,83 @@ export class LimitEngine {
       })
     );
   }
+
+  /**
+   * Retrieves current daily and monthly capacity and remaining headroom for a source
+   */
+  static getSourceCapacity(organizationId: string, paymentSourceId: string): {
+    dailyIntakeMinor: number;
+    dailyCapMinor: number;
+    remainingDailyMinor: number;
+    dailyPercentage: number;
+    monthlyIntakeMinor: number;
+    monthlyCapMinor: number;
+    remainingMonthlyMinor: number;
+    monthlyPercentage: number;
+    isNearCap: boolean;
+    isCapExceeded: boolean;
+    isSaturated: boolean;
+  } {
+    const db = getDatabase();
+    const source = db.prepare(`
+      SELECT id, daily_turnover_limit_minor, monthly_turnover_limit_minor
+      FROM payment_sources
+      WHERE id = ? AND organization_id = ?
+    `).get(paymentSourceId, organizationId) as any;
+
+    if (!source) {
+      return {
+        dailyIntakeMinor: 0,
+        dailyCapMinor: 0,
+        remainingDailyMinor: 0,
+        dailyPercentage: 0,
+        monthlyIntakeMinor: 0,
+        monthlyCapMinor: 0,
+        remainingMonthlyMinor: 0,
+        monthlyPercentage: 0,
+        isNearCap: false,
+        isCapExceeded: false,
+        isSaturated: false,
+      };
+    }
+
+    const { daily, monthly } = getCairoPeriodKeys();
+
+    const dailyRow = db.prepare(`
+      SELECT accumulated_intake_minor
+      FROM financial_limit_usage
+      WHERE payment_source_id = ? AND period_type = 'daily' AND period_key = ?
+    `).get(paymentSourceId, daily) as any;
+
+    const monthlyRow = db.prepare(`
+      SELECT accumulated_intake_minor
+      FROM financial_limit_usage
+      WHERE payment_source_id = ? AND period_type = 'monthly' AND period_key = ?
+    `).get(paymentSourceId, monthly) as any;
+
+    const dailyIntakeMinor = dailyRow?.accumulated_intake_minor || 0;
+    const monthlyIntakeMinor = monthlyRow?.accumulated_intake_minor || 0;
+    const dailyCapMinor = source.daily_turnover_limit_minor || 6000000;
+    const monthlyCapMinor = source.monthly_turnover_limit_minor || 20000000;
+
+    const dailyPercentage = percentageOf(dailyIntakeMinor, dailyCapMinor);
+    const monthlyPercentage = percentageOf(monthlyIntakeMinor, monthlyCapMinor);
+
+    const remainingDailyMinor = Math.max(0, dailyCapMinor - dailyIntakeMinor);
+    const remainingMonthlyMinor = Math.max(0, monthlyCapMinor - monthlyIntakeMinor);
+
+    return {
+      dailyIntakeMinor,
+      dailyCapMinor,
+      remainingDailyMinor,
+      dailyPercentage,
+      monthlyIntakeMinor,
+      monthlyCapMinor,
+      remainingMonthlyMinor,
+      monthlyPercentage,
+      isNearCap: dailyPercentage >= 90 || monthlyPercentage >= 90,
+      isCapExceeded: dailyPercentage >= 100 || monthlyPercentage >= 100,
+      isSaturated: dailyPercentage >= 98 || monthlyPercentage >= 98,
+    };
+  }
 }
