@@ -19,6 +19,9 @@ export function resolveConfiguredDatabaseFile(): string | undefined {
   if (explicit) return explicit;
   const volume = process.env.RAILWAY_VOLUME_MOUNT_PATH?.trim();
   if (volume) return path.join(volume, 'sarraf_ops.db');
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID) {
+    return path.join(process.cwd(), 'data', 'sarraf_ops.db');
+  }
   return undefined;
 }
 
