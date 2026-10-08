@@ -25,6 +25,7 @@ interface SessionData {
   merchantName: string;
   merchantNameAr: string;
   rails: PaymentRailOption[];
+  metadata?: Record<string, any> | null;
 }
 
 interface HostedCheckoutViewProps {
@@ -44,6 +45,7 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
   const [claimFeedback, setClaimFeedback] = useState<string | null>(null);
   const [redirectCountdown, setRedirectCountdown] = useState<number>(5);
   const [language, setLanguage] = useState<'ar' | 'en'>('ar');
+  const [showQr, setShowQr] = useState<boolean>(false);
 
   const pollIntervalRef = useRef<any>(null);
 
@@ -339,6 +341,21 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
           </div>
         </div>
 
+        {/* Payment Link Info Banner (if accessed via Payment Link) */}
+        {session.metadata?.title && (
+          <div className="p-4 rounded-3xl bg-blue-600/15 border border-blue-500/30 text-right rtl:text-right ltr:text-left space-y-1 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-black text-white">{session.metadata.title}</span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300">
+                {language === 'ar' ? 'فاتورة دفع مباشر' : 'Direct Payment Link'}
+              </span>
+            </div>
+            {session.metadata.description && (
+              <p className="text-xs text-slate-300 leading-relaxed">{session.metadata.description}</p>
+            )}
+          </div>
+        )}
+
         {/* Amount Hero Card */}
         <div className="p-5 rounded-3xl bg-gradient-to-b from-slate-900 to-slate-900/60 border border-slate-800 shadow-xl relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/10 rounded-full blur-2xl pointer-events-none" />
@@ -428,16 +445,39 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
                 <span className="text-lg font-mono font-bold text-blue-400 tracking-wider" dir="ltr">
                   {selectedRail.walletNumber}
                 </span>
-                <button
-                  onClick={() => copyToClipboard(selectedRail.walletNumber, 'number')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/20 cursor-pointer active:scale-95"
-                >
-                  <span className="material-symbols-outlined text-xs">
-                    {copiedField === 'number' ? 'check' : 'content_copy'}
-                  </span>
-                  <span>{copiedField === 'number' ? (language === 'ar' ? 'تم النسخ!' : 'Copied!') : (language === 'ar' ? 'نسخ الرقم' : 'Copy')}</span>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowQr(!showQr)}
+                    className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all cursor-pointer"
+                    title={language === 'ar' ? 'عرض رمز QR' : 'Show QR'}
+                  >
+                    <span className="material-symbols-outlined text-sm">qr_code_2</span>
+                  </button>
+                  <button
+                    onClick={() => copyToClipboard(selectedRail.walletNumber, 'number')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all shadow-md shadow-blue-600/20 cursor-pointer active:scale-95"
+                  >
+                    <span className="material-symbols-outlined text-xs">
+                      {copiedField === 'number' ? 'check' : 'content_copy'}
+                    </span>
+                    <span>{copiedField === 'number' ? (language === 'ar' ? 'تم النسخ!' : 'Copied!') : (language === 'ar' ? 'نسخ الرقم' : 'Copy')}</span>
+                  </button>
+                </div>
               </div>
+
+              {showQr && (
+                <div className="mt-3 p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center space-y-2 animate-fade-in">
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(selectedRail.walletNumber)}`}
+                    alt="Wallet QR Code"
+                    className="w-36 h-36 rounded-xl bg-white p-2 shadow-md"
+                  />
+                  <span className="text-[11px] text-slate-400">
+                    {language === 'ar' ? 'امسح الرمز بكاميرا التطبيق البنكي أو المحفظة' : 'Scan with banking or wallet app'}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Instruction Steps */}

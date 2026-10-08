@@ -512,6 +512,17 @@ export class OutboxWorker {
       WHERE organization_id = ? AND is_active = 1
     `).all(job.organizationId) as Array<{ id: string; url: string; signing_secret: string; subscribed_events: string }>;
 
+    const sessionUrl = job.payload?.session_webhook_url || job.payload?.webhook_url;
+    if (sessionUrl && typeof sessionUrl === 'string' && !endpoints.some((e) => e.url === sessionUrl)) {
+      const orgRow = db.prepare('SELECT webhook_secret FROM organizations WHERE id = ?').get(job.organizationId) as any;
+      endpoints.push({
+        id: `ep_dyn_${job.id}`,
+        url: sessionUrl,
+        signing_secret: orgRow?.webhook_secret || 'sec_default_session',
+        subscribed_events: 'payment.confirmed,checkout.session.completed',
+      });
+    }
+
     const failures: OutboxDeliveryError[] = [];
     for (const endpoint of endpoints) {
       if (!eventIsSubscribed(endpoint.subscribed_events, event) || this.endpointAlreadyReceived(endpoint.id, job.id)) {

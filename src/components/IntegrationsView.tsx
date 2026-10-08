@@ -672,29 +672,53 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
       {subTab === 'plugins' && (
         <div className="space-y-6">
           {/* E-Commerce Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* WooCommerce */}
             <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md flex flex-col justify-between space-y-4">
               <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center font-black text-xl">
-                  W
+                <div className="flex items-center justify-between">
+                  <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center font-black text-xl">
+                    W
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-600 border border-purple-500/20">
+                    HPOS Ready
+                  </span>
                 </div>
                 <h3 className="text-lg font-bold text-on-surface">WooCommerce / WordPress</h3>
                 <p className="text-xs text-on-surface-variant leading-relaxed">
                   {language === 'ar'
-                    ? 'إضافة ووكوميرس رسمية جاهزة للتحميل والتثبيت الفوري. تتيح وسيلة دفع فودافون كاش وإنستاباي مع تحديث حالة الطلبات تلقائياً.'
-                    : 'Downloadable ready WooCommerce payment gateway plugin. Auto-completes orders upon payment confirmation.'}
+                    ? 'إضافة ووكوميرس رسمية جاهزة في ملف ZIP للرفع المباشر في ووردبريس. تتيح وسيلة دفع فودافون كاش وإنستاباي مع تحديث حالة الطلبات تلقائياً.'
+                    : 'Ready-to-upload WooCommerce payment gateway plugin (.ZIP). Auto-completes orders upon payment confirmation.'}
                 </p>
+
+                {/* Quick 3-Step Guide */}
+                <div className="p-3 rounded-2xl bg-surface-container-low text-[11px] text-on-surface-variant space-y-1.5">
+                  <span className="font-bold text-on-surface block text-xs">
+                    {language === 'ar' ? 'طريقة التثبيت في 3 خطوات:' : 'Setup in 3 steps:'}
+                  </span>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-purple-600 shrink-0">1.</span>
+                    <span>{language === 'ar' ? 'حمّل ملف ZIP بالأسفل' : 'Download ZIP below'}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-purple-600 shrink-0">2.</span>
+                    <span>{language === 'ar' ? 'في ووردبريس: إضافات > رفع إضافة (Upload Plugin)' : 'In WordPress: Plugins > Add New > Upload Plugin'}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-purple-600 shrink-0">3.</span>
+                    <span>{language === 'ar' ? 'فعّل الإضافة والصق المفتاح السري والعام' : 'Activate & paste your keys in settings'}</span>
+                  </div>
+                </div>
               </div>
 
               <div className="pt-4 border-t border-outline-variant space-y-2">
                 <a
-                  href="/api/v1/integrations/woocommerce/plugin-download"
-                  download="class-wc-gateway-sarraf.php"
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all shadow-md shadow-purple-600/20 cursor-pointer"
+                  href="/api/v1/integrations/woocommerce/plugin-download?format=zip"
+                  download="sarraf-pay.zip"
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all shadow-md shadow-purple-600/20 cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-sm">download</span>
-                  <span>{language === 'ar' ? 'تحميل إضافة ووكوميرس (PHP)' : 'Download Plugin (.php)'}</span>
+                  <span>{language === 'ar' ? 'تحميل إضافة ووردبريس (sarraf-pay.zip)' : 'Download Plugin (.ZIP)'}</span>
                 </a>
               </div>
             </div>
@@ -702,21 +726,45 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
             {/* Shopify */}
             <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md flex flex-col justify-between space-y-4">
               <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center font-black text-xl">
-                  S
+                <div className="flex items-center justify-between">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center font-black text-xl">
+                    S
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                    Auto Webhook
+                  </span>
                 </div>
                 <h3 className="text-lg font-bold text-on-surface">Shopify (شوبيفاي)</h3>
                 <p className="text-xs text-on-surface-variant leading-relaxed">
                   {language === 'ar'
-                    ? 'ربط وسيلة دفع مخصصة (Custom Manual Payment Method) مع ربط Webhook الـ Orders لتحويل المشتري لصفحة الدفع وتأكيد الطلب.'
+                    ? 'ربط وسيلة دفع مخصصة في شوبيفاي مع ربط Webhook الـ Orders لإنشاء جلسات السداد آلياً وتأكيد التحويلات.'
                     : 'Connect custom manual payment instructions with Shopify webhooks to automatically verify orders.'}
                 </p>
+
+                {/* Quick 3-Step Guide */}
+                <div className="p-3 rounded-2xl bg-surface-container-low text-[11px] text-on-surface-variant space-y-1.5">
+                  <span className="font-bold text-on-surface block text-xs">
+                    {language === 'ar' ? 'طريقة الربط في شوبيفاي:' : 'Shopify Setup steps:'}
+                  </span>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-emerald-600 shrink-0">1.</span>
+                    <span>{language === 'ar' ? 'Settings > Payments > Manual Payment Methods > أضف فودافون كاش' : 'Settings > Payments > Manual Payment Methods'}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-emerald-600 shrink-0">2.</span>
+                    <span>{language === 'ar' ? 'Settings > Notifications > Webhooks > أضف Webhook لحدث Order creation' : 'Settings > Notifications > Webhooks > Add orders/create'}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-emerald-600 shrink-0">3.</span>
+                    <span>{language === 'ar' ? 'الصق الرابط المنسوخ أدناه لحفظ الربط' : 'Paste the webhook URL copied below'}</span>
+                  </div>
+                </div>
               </div>
 
               <div className="pt-4 border-t border-outline-variant space-y-2">
                 <button
                   onClick={() => copyText(`${currentOrigin}/api/v1/integrations/shopify/webhook?api_key=${currentKeys?.publicKey}`, 'Shopify Webhook URL')}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-sm">content_copy</span>
                   <span>{language === 'ar' ? 'نسخ رابط Shopify Webhook' : 'Copy Shopify Webhook'}</span>
@@ -727,8 +775,13 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
             {/* Easy Orders */}
             <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant shadow-md flex flex-col justify-between space-y-4">
               <div className="space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center font-black text-xl">
-                  EO
+                <div className="flex items-center justify-between">
+                  <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center font-black text-xl">
+                    EO
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                    منصة مصر الأولى
+                  </span>
                 </div>
                 <h3 className="text-lg font-bold text-on-surface">Easy Orders (إيزي أوردرز)</h3>
                 <p className="text-xs text-on-surface-variant leading-relaxed">
@@ -736,12 +789,31 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
                     ? 'المنصة الأكثر شعبية في مصر للتجارة الإلكترونية. أضف وسيلة دفع في إيزي أوردرز واربط Webhook الطلبات لإنشاء روابط الدفع فوراً.'
                     : 'Direct integration with Easy Orders platform. Auto-generates payment links upon order submission.'}
                 </p>
+
+                {/* Quick 3-Step Guide */}
+                <div className="p-3 rounded-2xl bg-surface-container-low text-[11px] text-on-surface-variant space-y-1.5">
+                  <span className="font-bold text-on-surface block text-xs">
+                    {language === 'ar' ? 'طريقة الربط في إيزي أوردرز:' : 'Easy Orders Setup steps:'}
+                  </span>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-blue-600 shrink-0">1.</span>
+                    <span>{language === 'ar' ? 'في إيزي أوردرز: الإعدادات > الويب هوك (Webhooks)' : 'In Easy Orders: Settings > Webhooks'}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-blue-600 shrink-0">2.</span>
+                    <span>{language === 'ar' ? 'اختر حدث (إنشاء طلب جديد) والصق الرابط أدناه' : 'Select "Order Created" and paste URL below'}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-bold text-blue-600 shrink-0">3.</span>
+                    <span>{language === 'ar' ? 'في وسائل الدفع: أضف وسيلة "فودافون كاش / إنستاباي - صرّاف"' : 'In Payment Methods: add Vodafone Cash / InstaPay'}</span>
+                  </div>
+                </div>
               </div>
 
               <div className="pt-4 border-t border-outline-variant space-y-2">
                 <button
                   onClick={() => copyText(`${currentOrigin}/api/v1/integrations/easyorders/webhook?api_key=${currentKeys?.publicKey}`, 'Easy Orders Webhook URL')}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-all shadow-md shadow-blue-600/20 cursor-pointer"
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-all shadow-md shadow-blue-600/20 cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-sm">content_copy</span>
                   <span>{language === 'ar' ? 'نسخ رابط Easy Orders Webhook' : 'Copy Easy Orders Webhook'}</span>

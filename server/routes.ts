@@ -862,10 +862,24 @@ apiRouter.post('/organizations/settings', requireAuth, requireRole(['owner', 'ad
     defaultTimezone || null,
     replacementTelegramToken,
     telegramChatId !== undefined ? telegramChatId : null,
-    webhookUrl !== undefined ? webhookUrl : null,
     replacementWebhookSecret,
     req.user!.organizationId
   );
+
+  // Synchronize webhook endpoint table for the outbox worker
+  if (webhookUrl !== undefined) {
+    const trimmedUrl = typeof webhookUrl === 'string' ? webhookUrl.trim() : '';
+    if (trimmedUrl) {
+      const existingEp = db.prepare('SELECT id FROM webhook_endpoints WHERE organization_id = ? LIMIT 1').get(req.user!.organizationId) as any;
+      if (existingEp) {
+        db.prepare('UPDATE webhook_endpoints SET url = ?, signing_secret = COALESCE(?, signing_secret), is_active = 1, updated_at = datetime("now") WHERE id = ?')
+          .run(trimmedUrl, replacementWebhookSecret, existingEp.id);
+      } else {
+        db.prepare('INSERT INTO webhook_endpoints (id, organization_id, url, signing_secret, subscribed_events, is_active) VALUES (?, ?, ?, ?, ?, 1)')
+          .run(`ep_${crypto.randomBytes(8).toString('hex')}`, req.user!.organizationId, trimmedUrl, replacementWebhookSecret || 'sec_live_default', 'payment.confirmed,checkout.session.completed');
+      }
+    }
+  }
 
   AuditService.record({
     organizationId: req.user!.organizationId,
@@ -3003,9 +3017,9 @@ apiRouter.post('/integrations/webhooks/test-ping', requireAuth, requireRole(['ow
 
 // Easy Orders (إيزي أوردرز) Native Webhook Receiver
 apiRouter.post('/integrations/easyorders/webhook', (req: Request, res: Response) => {
-  // Identify merchant via query param or header
+  // Identify merchant via query param or header (accepts sk_ or pk_)
   const apiKey = (req.query.api_key as string) || (req.headers['x-api-key'] as string);
-  const auth = apiKey ? ApiKeyService.authenticateSecretKey(apiKey) : null;
+  const auth = apiKey ? ApiKeyService.authenticateAnyKey(apiKey) : null;
 
   if (!auth) {
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'مفتاح الربط api_key غير صالح أو مفقود في الرابط' });
@@ -3047,8 +3061,9 @@ apiRouter.post('/integrations/easyorders/webhook', (req: Request, res: Response)
 
 // Shopify Order Webhook Receiver
 apiRouter.post('/integrations/shopify/webhook', (req: Request, res: Response) => {
+  // Identify merchant via query param or header (accepts sk_ or pk_)
   const apiKey = (req.query.api_key as string) || (req.headers['x-api-key'] as string);
-  const auth = apiKey ? ApiKeyService.authenticateSecretKey(apiKey) : null;
+  const auth = apiKey ? ApiKeyService.authenticateAnyKey(apiKey) : null;
 
   if (!auth) {
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'API key required' });
@@ -3087,16 +3102,30 @@ apiRouter.post('/integrations/shopify/webhook', (req: Request, res: Response) =>
   }
 });
 
-// Download WooCommerce Ready PHP Plugin
-apiRouter.get('/integrations/woocommerce/plugin-download', (_req: Request, res: Response) => {
-  const pluginPath = path.resolve(__dirname, 'templates', 'woocommerce', 'class-wc-gateway-sarraf.php');
-  if (!fs.existsSync(pluginPath)) {
-    res.status(404).send('Plugin file not found');
+// Download WooCommerce Ready Plugin (ZIP for WordPress admin upload, or single PHP file)
+apiRouter.get('/integrations/woocommerce/plugin-download', (req: Request, res: Response) => {
+  const format = req.query.format as string;
+  const zipPath = path.resolve(__dirname, 'templates', 'woocommerce', 'sarraf-pay.zip');
+  const phpPath = path.resolve(__dirname, 'templates', 'woocommerce', 'class-wc-gateway-sarraf.php');
+
+  if (format === 'php' || (!fs.existsSync(zipPath) && fs.existsSync(phpPath))) {
+    if (!fs.existsSync(phpPath)) {
+      res.status(404).send('Plugin file not found');
+      return;
+    }
+    res.setHeader('Content-Disposition', 'attachment; filename="class-wc-gateway-sarraf.php"');
+    res.setHeader('Content-Type', 'application/x-php');
+    fs.createReadStream(phpPath).pipe(res);
     return;
   }
 
-  res.setHeader('Content-Disposition', 'attachment; filename="class-wc-gateway-sarraf.php"');
-  res.setHeader('Content-Type', 'application/x-php');
-  fs.createReadStream(pluginPath).pipe(res);
+  if (fs.existsSync(zipPath)) {
+    res.setHeader('Content-Disposition', 'attachment; filename="sarraf-pay.zip"');
+    res.setHeader('Content-Type', 'application/zip');
+    fs.createReadStream(zipPath).pipe(res);
+    return;
+  }
+
+  res.status(404).send('Plugin archive not found');
 });
 

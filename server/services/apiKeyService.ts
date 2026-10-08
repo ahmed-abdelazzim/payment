@@ -255,4 +255,20 @@ export class ApiKeyService {
 
     return res.changes > 0;
   }
+
+  /**
+   * Flexible authenticator that accepts either a Secret Key (sk_...) or Public Key (pk_...)
+   * Useful for third-party webhook receivers (e.g. Easy Orders, Shopify)
+   */
+  static authenticateAnyKey(keyString: string): { organizationId: string; mode: 'live' | 'test'; keyId: string } | null {
+    if (!keyString || typeof keyString !== 'string') return null;
+    const cleanKey = keyString.replace(/^Bearer\s+/i, '').trim();
+    if (cleanKey.startsWith('sk_live_') || cleanKey.startsWith('sk_test_')) {
+      return this.authenticateSecretKey(cleanKey);
+    }
+    if (cleanKey.startsWith('pk_live_') || cleanKey.startsWith('pk_test_')) {
+      return this.authenticatePublicKey(cleanKey);
+    }
+    return null;
+  }
 }

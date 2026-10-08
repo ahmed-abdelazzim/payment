@@ -103,6 +103,12 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
               {language === 'ar' ? 'المميزات' : 'Features'}
             </button>
             <button
+              onClick={() => scrollToSection('gateways')}
+              className="hover:text-primary transition-colors cursor-pointer text-primary font-bold"
+            >
+              {language === 'ar' ? 'بوابة الدفع والمتاجر' : 'Store Gateways'}
+            </button>
+            <button
               onClick={() => scrollToSection('how-it-works')}
               className="hover:text-primary transition-colors cursor-pointer"
             >
@@ -534,6 +540,81 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                 {language === 'ar'
                   ? 'صرّاف يوفر أدوات تنظيم ومراقبة لحظية لرسائل وإشعارات الدفع. التقاط الرسالة ومطابقة الرصيد يساعدان في تسريع المتابعة اليومية، ولا يحلان محل التسوية الرسمية أو كشف الحساب البنكي المعتمد.'
                   : 'Sarraf Ops provides real-time telemetry and parsing for notification events. Telemetry ingestion aids daily operations and does not substitute for official banking settlement statements.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 4.5 Payment Gateway & E-Commerce Integration Section */}
+      <section id="gateways" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-gradient-to-b from-surface-container-low/30 to-surface-container-lowest">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          <div className="max-w-3xl mx-auto text-center mb-14">
+            <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">
+              {language === 'ar' ? 'بوابة الدفع ومساحة عمل المتاجر' : 'E-Commerce Payment Gateway'}
+            </span>
+            <h2 className="text-headline-sm sm:text-headline-md font-extrabold text-on-surface mb-3">
+              {language === 'ar'
+                ? 'اربط متجرك واقبل فودافون كاش وإنستاباي مع تأكيد فوري'
+                : 'Turn Sarraf into your Store’s Automated Payment Gateway'}
+            </h2>
+            <p className="text-body-md text-on-surface-variant leading-relaxed">
+              {language === 'ar'
+                ? 'حوّل صرّاف إلى بوابة دفع إلكترونية متكاملة لموقعك على WooCommerce أو Shopify أو Easy Orders. أموالك تصل مباشرة إلى محفظتك بدون أي وسيط مالي، مع تأكيد آلي فوري للطلبات.'
+                : 'Connect your store on WooCommerce, Shopify, or Easy Orders with instant automated order confirmation. Customer funds go directly to your wallet without intermediary cuts.'}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* WooCommerce Card */}
+            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-purple-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center font-black text-xl">
+                W
+              </div>
+              <h3 className="text-title-md font-bold text-on-surface">WooCommerce</h3>
+              <p className="text-body-xs text-on-surface-variant leading-relaxed">
+                {language === 'ar'
+                  ? 'إضافة ووردبريس رسمية جاهزة للتحميل بملف ZIP. تدعم ووكومرس الحديث بنظام HPOS وتحدث حالة الطلب لمكتمل فور التحويل.'
+                  : 'Ready-to-install WordPress plugin (.ZIP). HPOS compatible, auto-completes orders upon payment.'}
+              </p>
+            </div>
+
+            {/* Shopify Card */}
+            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-emerald-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center font-black text-xl">
+                S
+              </div>
+              <h3 className="text-title-md font-bold text-on-surface">Shopify</h3>
+              <p className="text-body-xs text-on-surface-variant leading-relaxed">
+                {language === 'ar'
+                  ? 'وسيلة دفع مخصصة لمتجرك على شوبيفاي مع ربط Webhooks الطلبات لتأكيد الدفع والمزامنة التلقائية.'
+                  : 'Custom payment method for Shopify stores with seamless webhook synchronization.'}
+              </p>
+            </div>
+
+            {/* Easy Orders Card */}
+            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-blue-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center font-black text-xl">
+                EO
+              </div>
+              <h3 className="text-title-md font-bold text-on-surface">Easy Orders</h3>
+              <p className="text-body-xs text-on-surface-variant leading-relaxed">
+                {language === 'ar'
+                  ? 'تكامل مباشر وسهل مع منصة إيزي أوردرز الأكثر انتشاراً في مصر، مع توجيه المشتري لصفحة الدفع الآلية.'
+                  : 'Native direct integration with Easy Orders platform in Egypt with auto-redirect.'}
+              </p>
+            </div>
+
+            {/* Drop-in SDK & Custom Card */}
+            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-primary/50 transition-all shadow-xs hover:shadow-md space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center font-black text-xl">
+                <span className="material-symbols-outlined text-2xl">code</span>
+              </div>
+              <h3 className="text-title-md font-bold text-on-surface">Drop-in JS SDK</h3>
+              <p className="text-body-xs text-on-surface-variant leading-relaxed">
+                {language === 'ar'
+                  ? 'كود جافاسكريبت سطرين فقط لفتح نافذة دفع منبثقة أو روابط دفع سريعة لمشاركتها على واتساب والسوشيال ميديا.'
+                  : 'Two lines of JavaScript for checkout modal popup or instant shareable payment links.'}
               </p>
             </div>
           </div>

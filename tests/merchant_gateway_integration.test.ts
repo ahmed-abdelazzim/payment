@@ -236,4 +236,56 @@ describe('Merchant Payment Gateway & Integrations', () => {
     assert.ok(status);
     assert.equal(status.status, 'confirmed');
   });
+
+  test('6. Flexible Authentication: authenticateAnyKey accepts both sk_ and pk_', () => {
+    const keys = ApiKeyService.generateKeySet(orgId, 'Unified Key Test', 'live');
+
+    // Accepts sk_live
+    const authSecret = ApiKeyService.authenticateAnyKey(keys.secretKey);
+    assert.ok(authSecret);
+    assert.equal(authSecret.organizationId, orgId);
+
+    // Accepts pk_live
+    const authPublic = ApiKeyService.authenticateAnyKey(keys.publicKey);
+    assert.ok(authPublic);
+    assert.equal(authPublic.organizationId, orgId);
+
+    // Rejects invalid strings
+    assert.equal(ApiKeyService.authenticateAnyKey('invalid_key_token'), null);
+    assert.equal(ApiKeyService.authenticateAnyKey(''), null);
+  });
+
+  test('7. Payment Link Direct Lookup via getSession(plink_id)', () => {
+    const link = PaymentLinkService.createPaymentLink(orgId, {
+      title: 'استشارة تجارية VIP',
+      description: 'جلسة استشارية خاصة مدتها ساعة',
+      amount: 1200.00,
+      redirectUrl: 'https://store.example.com/consultation-booked',
+    });
+
+    // Opening /pay/plink_... resolves cleanly into a checkout-ready session structure
+    const resolved = CheckoutService.getSession(link.id);
+    assert.ok(resolved);
+    assert.equal(resolved.id, link.id);
+    assert.equal(resolved.amount, 1200.00);
+    assert.equal(resolved.amountMinor, 120000);
+    assert.equal(resolved.status, 'pending');
+    assert.equal(resolved.metadata?.title, 'استشارة تجارية VIP');
+    assert.ok(resolved.rails.length > 0);
+  });
+
+  test('8. Sandbox Demo Fallback Rails in Test Mode', () => {
+    // Org2 has NO payment sources configured
+    const session = CheckoutService.createSession(orgId2, {
+      orderId: 'ORD-EMPTY-SOURCES',
+      amount: 75.00,
+      mode: 'test',
+    });
+
+    const sessionWithRails = CheckoutService.getSession(session.id);
+    assert.ok(sessionWithRails);
+    assert.ok(sessionWithRails.rails.length >= 2, 'Should provide demo rails in test mode');
+    assert.equal(sessionWithRails.rails[0].walletNumber, '01000000000');
+    assert.equal(sessionWithRails.rails[1].walletNumber, 'sandbox@instapay');
+  });
 });

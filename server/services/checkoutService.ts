@@ -113,6 +113,96 @@ export class CheckoutService {
     rails: PaymentRailOption[];
   }) | null {
     const db = getDatabase();
+
+    // Check if this is a direct Payment Link (plink_...)
+    if (sessionId && sessionId.startsWith('plink_')) {
+      const link = db.prepare(`
+        SELECT pl.*, o.name as org_name, o.name_ar as org_name_ar
+        FROM payment_links pl
+        JOIN organizations o ON pl.organization_id = o.id
+        WHERE pl.id = ? AND pl.is_active = 1
+      `).get(sessionId) as any;
+
+      if (!link) return null;
+
+      const sources = db.prepare(`
+        SELECT ps.id, ps.provider, ps.friendly_name, ps.wallet_number,
+               (SELECT address_value FROM payment_addresses WHERE payment_source_id = ps.id AND address_type = 'instapay_vpa' LIMIT 1) as instapay_vpa
+        FROM payment_sources ps
+        WHERE ps.organization_id = ? AND ps.is_paused_for_new_instructions = 0 AND ps.retired_at IS NULL
+      `).all(link.organization_id) as any[];
+
+      const providerLabelsAr: Record<string, string> = {
+        vodafone_cash: 'فودافون كاش',
+        instapay: 'إنستاباي (InstaPay)',
+        orange_cash: 'أورانج كاش',
+        etisalat_cash: 'إي آند كاش (اتصالات كاش)',
+      };
+
+      const providerLabelsEn: Record<string, string> = {
+        vodafone_cash: 'Vodafone Cash',
+        instapay: 'InstaPay',
+        orange_cash: 'Orange Cash',
+        etisalat_cash: 'e& Cash',
+      };
+
+      const rails: PaymentRailOption[] = sources.map((s) => ({
+        provider: s.provider,
+        providerLabel: providerLabelsEn[s.provider] || s.provider,
+        providerLabelAr: providerLabelsAr[s.provider] || s.friendly_name,
+        walletNumber: s.wallet_number,
+        instapayAddress: s.instapay_vpa || (s.provider === 'instapay' ? s.wallet_number : null),
+        instructionsAr: s.provider === 'instapay'
+          ? `حوّل المبلغ المطلوب عبر تطبيق إنستاباي إلى العنوان/الرقم: ${s.wallet_number}`
+          : `حوّل المبلغ المطلوب عبر محفظة ${providerLabelsAr[s.provider] || 'المحفظة'} إلى الرقم: ${s.wallet_number}`,
+      }));
+
+      if (rails.length === 0) {
+        rails.push(
+          {
+            provider: 'vodafone_cash',
+            providerLabel: 'Vodafone Cash (Demo Sandbox)',
+            providerLabelAr: 'فودافون كاش (تجريبي - Sandbox)',
+            walletNumber: '01000000000',
+            instructionsAr: 'بيئة تجريبية: يمكنك محاكاة التحويل دون إرسال أموال حقيقية.',
+          },
+          {
+            provider: 'instapay',
+            providerLabel: 'InstaPay (Demo Sandbox)',
+            providerLabelAr: 'إنستاباي (تجريبي - Sandbox)',
+            walletNumber: 'sandbox@instapay',
+            instapayAddress: 'sandbox@instapay',
+            instructionsAr: 'بيئة تجريبية: يمكنك محاكاة التحويل دون إرسال أموال حقيقية.',
+          }
+        );
+      }
+
+      return {
+        id: link.id,
+        organizationId: link.organization_id,
+        orderId: `LINK-${link.id.slice(-6).toUpperCase()}`,
+        amountMinor: link.amount_minor,
+        amount: fromMinor(link.amount_minor),
+        currency: link.currency || 'EGP',
+        customerName: null,
+        customerPhone: null,
+        customerEmail: null,
+        mode: 'live',
+        status: 'pending',
+        returnUrl: link.redirect_url,
+        cancelUrl: null,
+        webhookUrl: null,
+        metadata: { is_payment_link: true, title: link.title, description: link.description },
+        paymentLinkId: link.id,
+        expiresAt: new Date(Date.now() + 86400000 * 365).toISOString(),
+        createdAt: link.created_at,
+        updatedAt: link.updated_at,
+        merchantName: link.org_name,
+        merchantNameAr: link.org_name_ar || link.org_name,
+        rails,
+      };
+    }
+
     const row = db.prepare(`
       SELECT s.*, o.name as org_name, o.name_ar as org_name_ar
       FROM checkout_sessions s
@@ -162,6 +252,27 @@ export class CheckoutService {
         ? `حوّل المبلغ المطلوب عبر تطبيق إنستاباي إلى العنوان/الرقم: ${s.wallet_number}`
         : `حوّل المبلغ المطلوب عبر محفظة ${providerLabelsAr[s.provider] || 'المحفظة'} إلى الرقم: ${s.wallet_number}`,
     }));
+
+    // Sandbox test mode demo fallback rails if merchant has not added any real sources yet
+    if (rails.length === 0 && row.mode === 'test') {
+      rails.push(
+        {
+          provider: 'vodafone_cash',
+          providerLabel: 'Vodafone Cash (Demo Sandbox)',
+          providerLabelAr: 'فودافون كاش (تجريبي - Sandbox)',
+          walletNumber: '01000000000',
+          instructionsAr: 'بيئة تجريبية: يمكنك محاكاة التحويل دون إرسال أموال حقيقية.',
+        },
+        {
+          provider: 'instapay',
+          providerLabel: 'InstaPay (Demo Sandbox)',
+          providerLabelAr: 'إنستاباي (تجريبي - Sandbox)',
+          walletNumber: 'sandbox@instapay',
+          instapayAddress: 'sandbox@instapay',
+          instructionsAr: 'بيئة تجريبية: يمكنك محاكاة التحويل دون إرسال أموال حقيقية.',
+        }
+      );
+    }
 
     return {
       id: row.id,
@@ -323,6 +434,8 @@ export class CheckoutService {
       customer_phone: matchedSession.customer_phone,
       confirmed_at: confirmedAt,
       metadata: matchedSession.metadata_json ? JSON.parse(matchedSession.metadata_json) : null,
+      session_webhook_url: matchedSession.webhook_url || null,
+      webhook_url: matchedSession.webhook_url || null,
     };
 
     db.prepare(`
