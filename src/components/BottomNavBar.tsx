@@ -14,7 +14,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
   language,
 }) => {
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 w-full z-40 flex justify-around items-center px-3 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t border-outline-variant/80 bg-surface-container-lowest/90 backdrop-blur-md shadow-lg transition-colors">
+    <nav className="md:hidden fixed bottom-0 left-0 w-full z-40 flex justify-around items-center px-3 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t border-outline-variant/80 sarraf-glass-nav shadow-lg transition-colors">
       {/* Tab 1: Dashboard */}
       <button
         onClick={() => onSelectTab('dashboard')}

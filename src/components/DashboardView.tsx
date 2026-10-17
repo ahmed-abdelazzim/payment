@@ -33,6 +33,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const pendingReviewCount = transactions.filter((t) => t.status === 'review_required').length;
   const confirmedCount = transactions.filter((t) => t.status === 'confirmed').length;
+  const matchRate = transactions.length > 0 ? Math.round((confirmedCount / transactions.length) * 1000) / 10 : 0;
 
   const onlineDevicesCount = devices.filter((d) => d.status === 'online').length;
   const offlineDevice = devices.find((d) => d.status === 'offline');
@@ -46,6 +47,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <main className="py-6 max-w-7xl mx-auto px-4 sm:px-6 space-y-6">
+      <section className="flex flex-col md:flex-row md:items-end justify-between gap-4 !shadow-none">
+        <div>
+          <div className="flex items-center gap-2 text-label-xs text-blue-700 dark:text-blue-300 font-bold mb-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 sarraf-status-dot" />
+            <span>{language === 'ar' ? 'منظومة التسوية تعمل بصورة طبيعية' : 'Settlement systems operating normally'}</span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-on-surface">
+            {language === 'ar' ? 'نظرة عامة على السيولة والتسوية اللحظية' : 'Liquidity & real-time settlement overview'}
+          </h1>
+          <p className="mt-1 text-body-sm text-on-surface-variant">
+            {language === 'ar'
+              ? 'مراقبة مباشرة لمسارات الدفع والمحافظ وأجهزة الالتقاط من مساحة تشغيل واحدة.'
+              : 'Live monitoring for payment rails, wallets, and capture devices in one operations workspace.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={onOpenLedger} className="sarraf-header-action bg-surface-container-lowest">
+            <span className="material-symbols-outlined text-lg">fact_check</span>
+            <span>{language === 'ar' ? 'فتح دفتر المعاملات' : 'Open ledger'}</span>
+          </button>
+          <div className="px-3 py-2 rounded border border-outline-variant bg-surface-container-lowest text-label-xs text-on-surface-variant">
+            <span className="material-symbols-outlined text-sm align-middle me-1 text-blue-600">sync</span>
+            {language === 'ar' ? 'تحديث لحظي' : 'Live refresh'}
+          </div>
+        </div>
+      </section>
+
       {/* Offline Alert Banner */}
       {!offlineAlertDismissed && offlineDevice && (
         <div className="rounded-2xl border border-error/40 bg-error-container/20 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all shadow-xs heroui-card">
@@ -98,9 +126,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       )}
 
       {/* KPI Metric Cards Grid */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {/* Card 1: Received Today */}
-        <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
+        <div className="sarraf-metric bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
           <div className="flex items-center justify-between">
             <span className="text-label-xs font-bold text-on-surface-variant uppercase tracking-wider">
               {language === 'ar' ? 'إجمالي التحويلات اليوم' : 'Received Today'}
@@ -139,7 +167,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Card 2: Review Required */}
-        <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
+        <div className="sarraf-metric bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
           <div className="flex items-center justify-between">
             <span className="text-label-xs font-bold text-on-surface-variant uppercase tracking-wider">
               {language === 'ar' ? 'حركات تحتاج مراجعة' : 'Review Required'}
@@ -175,7 +203,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Card 3: Active Fleet */}
-        <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
+        <div className="sarraf-metric bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
           <div className="flex items-center justify-between">
             <span className="text-label-xs font-bold text-on-surface-variant uppercase tracking-wider">
               {language === 'ar' ? 'أسطول الأجهزة النشطة' : 'Active Fleet'}
@@ -202,6 +230,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="flex items-center gap-2 text-label-xs border-t border-outline-variant/60 pt-3 text-on-surface-variant">
             <span className="truncate">فودافون كاش، إنستاباي، أورنچ كاش، إي آند</span>
+          </div>
+        </div>
+
+        {/* Card 4: Automated Match Rate */}
+        <div className="sarraf-metric bg-surface-container-lowest rounded-2xl border border-outline-variant p-5 flex flex-col justify-between shadow-xs heroui-card">
+          <div className="flex items-center justify-between">
+            <span className="text-label-xs font-bold text-on-surface-variant uppercase tracking-wider">
+              {language === 'ar' ? 'معدل المطابقة الآلية' : 'Automated Match Rate'}
+            </span>
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
+              <span className="material-symbols-outlined text-lg">verified</span>
+            </div>
+          </div>
+          <div className="my-3 flex items-baseline gap-1.5">
+            <span className="text-headline-lg font-code-num font-extrabold text-emerald-700 dark:text-emerald-400">{matchRate.toFixed(1)}%</span>
+          </div>
+          <div className="flex items-center justify-between text-label-xs border-t border-outline-variant/60 pt-3 text-on-surface-variant">
+            <span>{language === 'ar' ? 'مطابقة مؤكدة' : 'confirmed matches'}</span>
+            <span className="font-code-num font-bold text-on-surface">{confirmedCount}/{transactions.length}</span>
           </div>
         </div>
       </section>

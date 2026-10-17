@@ -579,7 +579,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 }`;
 
   return (
-    <div className="py-6 pb-28 max-w-7xl mx-auto min-h-screen px-4 sm:px-6 flex flex-col gap-6">
+    <div className="py-8 pb-28 max-w-7xl mx-auto min-h-screen px-4 sm:px-6 flex flex-col gap-7 sarraf-shell">
       {/* Header & Main Control Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-outline-variant/80">
         <div>

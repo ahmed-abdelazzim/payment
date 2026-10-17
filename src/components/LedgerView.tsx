@@ -124,7 +124,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   const activeDetailTx = selectedTransaction || transactions[0];
 
   return (
-    <div className="py-6 pb-28 max-w-7xl mx-auto min-h-screen px-4 sm:px-6 flex flex-col gap-6">
+    <div className="py-8 pb-28 max-w-7xl mx-auto min-h-screen px-4 sm:px-6 flex flex-col gap-7 sarraf-shell">
       {/* Top Operational Bar: Title, Search, Stats */}
       <section className="flex flex-col gap-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-outline-variant/80">

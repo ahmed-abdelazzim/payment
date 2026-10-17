@@ -412,7 +412,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
   const currentKeys = isTestMode ? setupData?.keys.test : setupData?.keys.live;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6 animate-fade-in" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-7 animate-fade-in sarraf-shell" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       {/* Top Hero Banner */}
       <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-blue-900/40 via-indigo-900/30 to-slate-900/50 border border-blue-500/20 backdrop-blur-xl relative overflow-hidden shadow-2xl">
         <div className="absolute top-0 right-0 w-72 h-72 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />

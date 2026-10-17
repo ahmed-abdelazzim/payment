@@ -148,7 +148,7 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ language }) => {
   };
 
   return (
-    <div className="pt-16 pb-28 max-w-5xl mx-auto px-margin-mobile flex flex-col gap-space-md">
+    <div className="pt-16 pb-28 max-w-5xl mx-auto px-margin-mobile flex flex-col gap-6 sarraf-shell">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-space-sm border-b border-outline-variant">
         <div>
           <h1 className="text-headline-md font-bold text-on-surface">

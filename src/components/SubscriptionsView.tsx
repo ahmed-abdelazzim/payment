@@ -292,7 +292,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-margin-mobile sm:px-margin-desktop py-space-md sm:py-space-lg space-y-space-lg">
+    <div className="max-w-7xl mx-auto px-margin-mobile sm:px-margin-desktop py-8 sm:py-10 space-y-8 sarraf-shell">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-space-sm border-b border-outline-variant">
         <div>
@@ -383,7 +383,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
                 </div>
 
                 <div
-                  className={`rounded-2xl p-6 flex flex-col justify-between transition-all border flex-1 ${
+                  className={`sarraf-metric rounded-2xl p-6 flex flex-col justify-between transition-all border flex-1 ${
                     isAnnual
                       ? 'bg-surface-container-lowest border-primary shadow-lg ring-2 ring-primary/20'
                       : 'bg-surface-container-lowest border-outline-variant hover:border-primary/50'

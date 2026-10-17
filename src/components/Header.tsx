@@ -34,151 +34,109 @@ export const Header: React.FC<HeaderProps> = ({
   theme,
   onToggleTheme,
 }) => {
+  const isArabic = language === 'ar';
+  const workspaceName = isArabic ? workspace.nameAr || workspace.name : workspace.name;
+  const userInitial = currentUser?.fullName?.trim()?.[0]?.toUpperCase() || workspace.initials || 'S';
+
   return (
-    <header className="sticky top-0 z-40 w-full bg-surface-container-lowest/85 backdrop-blur-md border-b border-outline-variant/80 shadow-xs transition-colors">
-      <div className="max-w-7xl mx-auto h-14 px-4 sm:px-6 flex items-center justify-between">
-        {/* Leading & Brand Cluster */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-primary font-bold">
-            <div className="w-8 h-8 rounded-xl bg-primary text-on-primary flex items-center justify-center shadow-xs">
-              <span className="material-symbols-outlined text-lg">
-                account_balance_wallet
-              </span>
+    <header className="sarraf-app-header sticky top-0 z-40 border-b border-outline-variant/90 bg-surface-container-lowest/95 backdrop-blur-xl">
+      <div className="h-16 px-4 lg:px-6 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={onToggleDrawer}
+            className="sarraf-mobile-menu sarraf-icon-button"
+            aria-label={isArabic ? 'فتح قائمة مساحة العمل' : 'Open workspace menu'}
+          >
+            <span className="material-symbols-outlined">menu</span>
+          </button>
+
+          <div className="sarraf-mobile-brand items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded bg-primary text-on-primary flex items-center justify-center font-black">ص</div>
+            <div className="leading-tight min-w-0">
+              <p className="text-xs font-extrabold text-on-surface truncate">Sarraf Ops</p>
+              <p className="text-[9px] text-on-surface-variant truncate">{isArabic ? 'تشغيل المدفوعات' : 'Payment operations'}</p>
             </div>
-            <span className="text-title-md font-extrabold tracking-tight">Sarraf Ops</span>
-            <span className="text-label-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-semibold border border-primary/20">
-              {language === 'ar' ? 'صرّاف مصر' : 'Enterprise'}
-            </span>
           </div>
 
-          <div className="h-4 w-px bg-outline-variant mx-1 hidden sm:block"></div>
+          <div className="hidden lg:flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded bg-primary text-on-primary flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-xl">account_balance</span>
+            </div>
+            <div className="min-w-0 leading-tight">
+              <p className="text-label-xs text-on-surface-variant font-semibold">
+                {isArabic ? 'مساحة العمل النشطة' : 'Active workspace'}
+              </p>
+              <p className="text-body-sm text-on-surface font-extrabold truncate">{workspaceName}</p>
+            </div>
+          </div>
 
-          {/* Enterprise Workspace Context */}
-          <div className="hidden sm:flex items-center gap-2">
-            <span className="text-body-md text-on-surface font-bold">
-              {language === 'ar' ? workspace.nameAr || workspace.name : workspace.name}
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded border border-outline-variant bg-surface-container-low">
+            <span className={`w-2 h-2 rounded-full ${devicesOnlineCount > 0 ? 'bg-emerald-500 sarraf-status-dot' : 'bg-slate-400'}`} />
+            <span className="text-label-xs font-code-num font-bold text-on-surface whitespace-nowrap">
+              {devicesOnlineCount}/{totalDevicesCount}
             </span>
-            <span className="text-label-sm text-on-surface-variant font-normal">
-              · {language === 'ar' ? workspace.name : workspace.nameAr || workspace.name}
+            <span className="text-label-xs text-on-surface-variant whitespace-nowrap">
+              {isArabic ? 'أجهزة متصلة' : 'devices online'}
             </span>
           </div>
         </div>
 
-        {/* Telemetry Badge & Global Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Live Terminal Connection Pill */}
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-surface-container-low border border-outline-variant shadow-xs">
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                devicesOnlineCount > 0 ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse' : 'bg-outline'
-              }`}
-            ></span>
-            <span className="text-label-sm font-code-num text-on-surface whitespace-nowrap font-medium">
-              {devicesOnlineCount}/{totalDevicesCount} {language === 'ar' ? 'أجهزة متصلة' : 'Online'}
-            </span>
-          </div>
-
-          {/* Home Link */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {onNavigateHome && (
-            <button
-              onClick={onNavigateHome}
-              title={language === 'ar' ? 'الصفحة الرئيسية للمنصة' : 'Public Website'}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-outline-variant bg-surface-container-low text-label-sm font-semibold text-on-surface hover:bg-surface-container transition-all active:scale-95 cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-sm">home</span>
-              <span className="hidden md:inline">
-                {language === 'ar' ? 'الرئيسية' : 'Home'}
-              </span>
+            <button onClick={onNavigateHome} className="sarraf-header-action" title={isArabic ? 'الرئيسية' : 'Home'}>
+              <span className="material-symbols-outlined text-[18px]">home</span>
+              <span className="hidden xl:inline">{isArabic ? 'الرئيسية' : 'Home'}</span>
             </button>
           )}
 
-          {/* Onboarding Launchpad Guide Trigger */}
-          <button
-            onClick={onOpenOnboarding}
-            title={language === 'ar' ? 'دليل البدء السريع وضبط مساحة العمل' : 'Onboarding Launchpad'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-outline-variant bg-surface-container-low text-label-sm font-semibold text-primary hover:bg-surface-container transition-all active:scale-95 cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-sm text-primary">rocket_launch</span>
-            <span className="hidden md:inline">
-              {language === 'ar' ? 'دليل البدء' : 'Setup Guide'}
-            </span>
+          <button onClick={onOpenOnboarding} className="sarraf-header-action sarraf-header-desktop-action" title={isArabic ? 'دليل البدء' : 'Setup guide'}>
+            <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
+            <span className="hidden xl:inline">{isArabic ? 'دليل البدء' : 'Setup'}</span>
           </button>
 
-          {/* Subscriptions & Plans Quick Access */}
           {onOpenSubscriptions && (
-            <button
-              onClick={onOpenSubscriptions}
-              title={language === 'ar' ? 'الباقات والاشتراك' : 'Plans & Subscriptions'}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 text-label-sm font-bold text-primary hover:bg-primary/20 transition-all active:scale-95 cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-sm">workspace_premium</span>
-              <span className="hidden lg:inline">
-                {language === 'ar' ? 'الباقات' : 'Plans'}
-              </span>
+            <button onClick={onOpenSubscriptions} className="sarraf-header-action sarraf-header-desktop-action" title={isArabic ? 'الباقات' : 'Plans'}>
+              <span className="material-symbols-outlined text-[18px]">workspace_premium</span>
+              <span className="hidden xl:inline">{isArabic ? 'الباقات' : 'Plans'}</span>
             </button>
           )}
 
-          {/* Gateway & Integrations Quick Access */}
           {onOpenIntegrations && (
             <button
               onClick={onOpenIntegrations}
-              title={language === 'ar' ? 'بوابة الدفع والربط بالمتاجر' : 'Payment Gateway & Integrations'}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-label-sm font-bold transition-all active:scale-95 cursor-pointer ${
-                currentTab === 'integrations'
-                  ? 'border-blue-500 bg-blue-500 text-white shadow-xs'
-                  : 'border-outline-variant bg-surface-container-low text-blue-600 dark:text-blue-400 hover:bg-surface-container'
-              }`}
+              className={`sarraf-header-action sarraf-header-desktop-action ${currentTab === 'integrations' ? 'sarraf-header-action-active' : ''}`}
+              title={isArabic ? 'بوابة الدفع' : 'Payment gateway'}
             >
-              <span className="material-symbols-outlined text-sm">storefront</span>
-              <span className="hidden lg:inline">
-                {language === 'ar' ? 'بوابة الدفع' : 'Gateway'}
-              </span>
+              <span className="material-symbols-outlined text-[18px]">storefront</span>
+              <span className="hidden xl:inline">{isArabic ? 'بوابة الدفع' : 'Gateway'}</span>
             </button>
           )}
 
-          {/* Language Switcher */}
-          <button
-            onClick={onToggleLanguage}
-            id="langToggle"
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-label-sm text-on-surface-variant hover:bg-surface-container hover:text-on-surface active:scale-95 transition-all cursor-pointer border border-transparent hover:border-outline-variant"
-            aria-label="Switch Language"
-          >
-            <span className="material-symbols-outlined text-sm">translate</span>
-            <span className={`font-bold ${language === 'en' ? 'text-primary' : 'text-on-surface-variant'}`}>
-              EN
-            </span>
-            <span className="text-outline/40">|</span>
-            <span className={`font-bold ${language === 'ar' ? 'text-primary' : 'text-on-surface-variant'}`}>
-              عربي
-            </span>
+          <span className="hidden sm:block h-6 w-px bg-outline-variant mx-1" />
+
+          <button onClick={onToggleLanguage} id="langToggle" className="sarraf-icon-button" aria-label="Switch Language" title={isArabic ? 'English' : 'العربية'}>
+            <span className="material-symbols-outlined text-[19px]">translate</span>
+            <span className="text-[10px] font-bold">{isArabic ? 'EN' : 'AR'}</span>
           </button>
 
-          {/* Night Mode Theme Toggle */}
           {onToggleTheme && (
             <button
               onClick={onToggleTheme}
               id="themeToggle"
-              className="flex items-center justify-center w-8 h-8 rounded-xl text-on-surface-variant hover:text-primary hover:bg-surface-container active:scale-90 transition-all cursor-pointer border border-transparent hover:border-outline-variant"
-              title={theme === 'dark' ? (language === 'ar' ? 'تفعيل الوضع النهاري' : 'Switch to Light Mode') : (language === 'ar' ? 'تفعيل الوضع الليلي (Night Mode)' : 'Switch to Dark Mode')}
+              className="sarraf-icon-button"
+              title={theme === 'dark' ? (isArabic ? 'الوضع النهاري' : 'Light mode') : (isArabic ? 'الوضع الليلي' : 'Dark mode')}
               aria-label="Toggle Theme"
             >
-              <span className="material-symbols-outlined text-lg">
-                {theme === 'dark' ? 'light_mode' : 'dark_mode'}
-              </span>
+              <span className="material-symbols-outlined text-[19px]">{theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
             </button>
           )}
 
-          {/* User Profile Avatar / Drawer Opener */}
-          <button
-            onClick={onToggleDrawer}
-            className="flex items-center gap-2 p-1.5 rounded-xl text-on-surface-variant hover:bg-surface-container active:scale-95 transition-all cursor-pointer border border-transparent hover:border-outline-variant"
-            title="Open Workspace Menu"
-            aria-label="Toggle Drawer"
-          >
-            <div className="w-7 h-7 rounded-lg bg-primary text-on-primary font-bold text-label-xs flex items-center justify-center shadow-xs">
-              {currentUser ? currentUser.fullName[0].toUpperCase() : workspace.initials}
-            </div>
-            <span className="material-symbols-outlined text-xl">menu</span>
+          <button onClick={onToggleDrawer} className="sarraf-profile-button" aria-label="Toggle Drawer" title={currentUser?.fullName || workspaceName}>
+            <span className="hidden md:block text-end leading-tight max-w-28">
+              <span className="block text-[11px] font-bold truncate text-on-surface">{currentUser?.fullName || workspaceName}</span>
+              <span className="block text-[9px] text-on-surface-variant truncate">{isArabic ? 'مدير العمليات' : 'Operations admin'}</span>
+            </span>
+            <span className="w-8 h-8 rounded bg-primary text-on-primary font-extrabold text-label-sm flex items-center justify-center">{userInitial}</span>
           </button>
         </div>
       </div>

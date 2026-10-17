@@ -233,7 +233,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-margin-mobile py-6 space-y-6 pt-16 pb-24">
+    <div className="max-w-7xl mx-auto px-margin-mobile py-8 space-y-7 pt-16 pb-24 sarraf-shell">
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-outline-variant">
         <div>

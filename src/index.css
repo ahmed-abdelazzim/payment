@@ -49,8 +49,8 @@
   --color-secondary-fixed-dim: #cbd5e1;
   --color-on-tertiary-fixed-variant: #1d4ed8;
 
-  --font-inter: 'Inter', 'Cairo', sans-serif;
-  --font-arabic: 'Cairo', 'Inter', sans-serif;
+  --font-inter: 'IBM Plex Sans', 'Inter', 'Cairo', sans-serif;
+  --font-arabic: 'IBM Plex Sans Arabic', 'Cairo', 'IBM Plex Sans', sans-serif;
   --font-code-num: 'JetBrains Mono', monospace;
   --font-headline-sm: 'Cairo', 'Inter', sans-serif;
   --font-body-md: 'Cairo', 'Inter', sans-serif;
@@ -75,18 +75,164 @@
 
 /* Base Body Styles */
 body {
-  background-color: var(--color-background);
+  background-color: #faf8ff;
+  background-image: none;
   color: var(--color-on-surface);
-  font-family: 'Inter', 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'IBM Plex Sans', 'Inter', 'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Product polish layer: shared visual language for the public site and app shell. */
+::selection { background: rgb(37 99 235 / 0.18); color: var(--color-on-surface); }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 0.28);
+  outline-offset: 2px;
+}
+
+.sarraf-shell {
+  background-image: none;
+}
+.sarraf-hero-glow::before {
+  content: '';
+  position: absolute;
+  inset: -8rem 8% auto;
+  height: 22rem;
+  border-radius: 999px;
+  background: radial-gradient(ellipse, rgb(37 99 235 / 0.14), transparent 68%);
+  filter: blur(18px);
+  pointer-events: none;
+}
+.sarraf-gradient-text {
+  background: linear-gradient(110deg, #1d4ed8 10%, #0891b2 54%, #0f766e 96%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sarraf-elevated {
+  box-shadow: 0 22px 55px rgb(15 23 42 / 0.10), 0 4px 16px rgb(37 99 235 / 0.06);
+}
+.sarraf-grid-bg {
+  background-image: linear-gradient(rgb(148 163 184 / 0.08) 1px, transparent 1px), linear-gradient(90deg, rgb(148 163 184 / 0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 88%);
+}
+.sarraf-status-dot { box-shadow: 0 0 0 4px rgb(16 185 129 / 0.12), 0 0 18px rgb(16 185 129 / 0.42); }
+.sarraf-icon-button {
+  min-width: 2.25rem;
+  height: 2.25rem;
+  padding-inline: .45rem;
+  border: 1px solid transparent;
+  border-radius: .25rem;
+  color: var(--color-on-surface-variant);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .2rem;
+  transition: background .18s ease, border-color .18s ease, color .18s ease;
+}
+.sarraf-icon-button:hover { background: var(--color-surface-container-low); border-color: var(--color-outline-variant); color: var(--color-on-surface); }
+.sarraf-header-action {
+  min-height: 2.25rem;
+  padding: .42rem .7rem;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: .25rem;
+  background: var(--color-surface-container-lowest);
+  color: var(--color-on-surface-variant);
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background .18s ease, border-color .18s ease, color .18s ease;
+}
+.sarraf-header-action:hover { background: var(--color-surface-container-low); color: var(--color-on-surface); border-color: #cbd5e1; }
+.sarraf-header-action-active { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.sarraf-profile-button {
+  min-height: 2.5rem;
+  padding: .2rem;
+  border-radius: .25rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .55rem;
+  transition: background .18s ease;
+}
+.sarraf-profile-button:hover { background: var(--color-surface-container-low); }
+.sarraf-mobile-menu { display: inline-flex; }
+.sarraf-mobile-brand { display: flex; }
+.sarraf-nav-item {
+  width: 100%;
+  min-height: 2.45rem;
+  padding: .55rem .7rem;
+  border-radius: .25rem;
+  color: #aeb8d3;
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  font-size: .76rem;
+  font-weight: 600;
+  text-align: start;
+  transition: color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.sarraf-nav-item:hover { color: #fff; background: rgb(255 255 255 / .07); }
+.sarraf-nav-item-active { color: #fff; background: #0b5ed7; box-shadow: inset 3px 0 0 #8ed5ff; }
+[dir='rtl'] .sarraf-nav-item-active { box-shadow: inset -3px 0 0 #8ed5ff; }
+.sarraf-nav-badge { min-width: 1.2rem; height: 1.2rem; padding-inline: .3rem; border-radius: .2rem; background: rgb(255 255 255 / .12); display: inline-flex; align-items: center; justify-content: center; font-size: .62rem; }
+.sarraf-nav-footer-button { height: 2.2rem; border: 1px solid rgb(255 255 255 / .1); border-radius: .25rem; color: #cbd5e1; background: rgb(255 255 255 / .045); display: flex; align-items: center; justify-content: center; transition: background .16s ease, color .16s ease; }
+.sarraf-nav-footer-button:hover { background: rgb(255 255 255 / .1); color: #fff; }
+.sarraf-auth-visual { grid-area: visual; background: #06102b; }
+.sarraf-auth-panel { grid-area: form; }
+.sarraf-auth-grid {
+  background-image: linear-gradient(rgb(142 213 255 / .08) 1px, transparent 1px), linear-gradient(90deg, rgb(142 213 255 / .08) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: linear-gradient(to bottom, black, transparent 92%);
+}
+.sarraf-rail-vodafone { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.sarraf-rail-orange { color: #c2410c; background: #fff7ed; border-color: #fed7aa; }
+.sarraf-rail-etisalat { color: #4d7c0f; background: #f7fee7; border-color: #d9f99d; }
+.sarraf-rail-instapay { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+html.dark .sarraf-rail-vodafone { color: #fca5a5; background: rgb(127 29 29 / .25); border-color: rgb(248 113 113 / .35); }
+html.dark .sarraf-rail-orange { color: #fdba74; background: rgb(124 45 18 / .25); border-color: rgb(251 146 60 / .35); }
+html.dark .sarraf-rail-etisalat { color: #bef264; background: rgb(63 98 18 / .25); border-color: rgb(163 230 53 / .35); }
+html.dark .sarraf-rail-instapay { color: #93c5fd; background: rgb(30 64 175 / .25); border-color: rgb(96 165 250 / .35); }
+.sarraf-metric { transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+.sarraf-metric:hover { transform: translateY(-3px); box-shadow: 0 16px 35px rgb(15 23 42 / 0.09); border-color: rgb(37 99 235 / 0.30); }
+.sarraf-primary-btn { box-shadow: 0 10px 22px rgb(37 99 235 / 0.22); transition: transform .2s ease, box-shadow .2s ease, filter .2s ease; }
+.sarraf-primary-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgb(37 99 235 / 0.28); filter: saturate(1.08); }
+.sarraf-glass-nav { background: rgb(255 255 255 / 0.78); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.sarraf-table { border-collapse: separate; border-spacing: 0; overflow: hidden; border: 1px solid var(--color-outline-variant); border-radius: 1rem; }
+.sarraf-table thead { background: linear-gradient(180deg, var(--color-surface-container), var(--color-surface-container-low)); }
+.sarraf-table th { color: var(--color-on-surface-variant); font-size: 0.68rem; letter-spacing: .04em; text-transform: uppercase; font-weight: 700; white-space: nowrap; }
+.sarraf-table tbody tr { transition: background .18s ease; }
+.sarraf-table tbody tr:hover { background: rgb(37 99 235 / 0.045); }
+.sarraf-table td, .sarraf-table th { border-bottom: 1px solid var(--color-outline-variant); }
+.sarraf-table tbody tr:last-child td { border-bottom: 0; }
+.sarraf-input { background: var(--color-surface-container-lowest); border: 1px solid var(--color-outline-variant); border-radius: .75rem; transition: border-color .2s, box-shadow .2s, background .2s; }
+.sarraf-input:hover { border-color: rgb(37 99 235 / .35); }
+.sarraf-input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 4px rgb(37 99 235 / .10); outline: 0; }
+input:not([type='checkbox']):not([type='radio']), select, textarea { transition: border-color .2s, box-shadow .2s, background .2s; }
+input:not([type='checkbox']):not([type='radio']):focus, select:focus, textarea:focus { outline: 0; border-color: var(--color-primary) !important; box-shadow: 0 0 0 4px rgb(37 99 235 / .10); }
+.sarraf-section-title { display: flex; align-items: center; gap: .65rem; font-weight: 800; letter-spacing: -.015em; }
+.sarraf-section-title::before { content: ''; width: .28rem; height: 1.35rem; border-radius: 99px; background: linear-gradient(#2563eb, #06b6d4); }
+.sarraf-modal-backdrop { background: rgb(15 23 42 / .42); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px); }
+.sarraf-modal { box-shadow: 0 28px 80px rgb(15 23 42 / .22), 0 8px 25px rgb(37 99 235 / .08); animation: sarrafModalIn .22s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes sarrafModalIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (max-width: 640px) {
+  .sarraf-elevated { box-shadow: 0 14px 30px rgb(15 23 42 / .08); }
+  .sarraf-table { display: block; overflow-x: auto; white-space: nowrap; }
+  .sarraf-section-title { font-size: 1rem; }
+}
+html.dark .sarraf-shell { background-image: linear-gradient(180deg, rgb(15 23 42 / 0.65), transparent 24rem), radial-gradient(circle at 90% 0%, rgb(59 130 246 / 0.10), transparent 26rem); }
+html.dark .sarraf-glass-nav { background: rgb(9 13 22 / 0.78); }
+html.dark body { background-image: radial-gradient(circle at 8% 0%, rgb(59 130 246 / 0.12), transparent 28rem), radial-gradient(circle at 94% 12%, rgb(14 165 233 / 0.08), transparent 24rem); }
+
 /* RTL Typography defaults to Cairo */
 [dir="rtl"],
 [dir="rtl"] body {
-  font-family: 'Cairo', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'IBM Plex Sans Arabic', 'Cairo', 'IBM Plex Sans', sans-serif;
 }
 
 /* Custom Typography & Utility helpers */
@@ -272,11 +418,85 @@ html.dark ::-webkit-scrollbar-thumb:hover {
 
 /* HeroUI Style Glass & Card Utilities */
 .heroui-card {
-  border-radius: 1rem;
+  border-radius: .5rem;
   background-color: var(--color-surface-container-lowest);
   border: 1px solid var(--color-outline-variant);
   box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Sarraf Ops reference system: structural surfaces, compact geometry, and
+   unambiguous operational states from the supplied Stitch design. */
+:root {
+  --color-background: #faf8ff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f3f3ff;
+  --color-surface-container: #ebedff;
+  --color-surface-container-high: #e3e7ff;
+  --color-outline-variant: #e2e8f0;
+  --color-on-surface: #131a33;
+  --color-on-surface-variant: #45464d;
+  --color-primary: #06102b;
+  --color-primary-container: #1c2541;
+  --color-surface-tint: #2563eb;
+}
+
+.sarraf-shell .heroui-card,
+.sarraf-shell .sarraf-table,
+.sarraf-shell section {
+  border-radius: .5rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / .04);
+}
+
+.sarraf-shell button.bg-primary,
+.sarraf-shell .sarraf-primary-btn {
+  border-radius: .25rem;
+  box-shadow: none;
+}
+
+.sarraf-shell .rounded-2xl { border-radius: .5rem; }
+.sarraf-shell .rounded-xl { border-radius: .375rem; }
+.sarraf-shell .rounded-lg { border-radius: .25rem; }
+
+.font-code-num, .font-num, [class*="font-code"] {
+  font-variant-numeric: tabular-nums;
+}
+
+html.dark body { background-color: #0b1326; background-image: none; }
+html.dark .sarraf-shell { background-image: none; }
+html.dark .sarraf-shell .heroui-card,
+html.dark .sarraf-shell section { background-color: #0f172a; border-color: #1e293b; }
+
+@media (min-width: 1024px) {
+  .sarraf-auth-shell { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  [dir='rtl'] .sarraf-auth-shell { grid-template-areas: 'form visual'; }
+  [dir='ltr'] .sarraf-auth-shell { grid-template-areas: 'visual form'; }
+  /* The Stitch reference uses a persistent operational rail on desktop. */
+  [dir='rtl'] .sarraf-app-shell { padding-right: 280px; }
+  [dir='ltr'] .sarraf-app-shell { padding-left: 280px; }
+  .sarraf-app-shell > header { width: auto; border-bottom-color: #e2e8f0; }
+  .sarraf-app-shell > main { width: 100%; }
+  #sideDrawer.sarraf-desktop-nav {
+    width: 280px;
+    transform: translateX(0) !important;
+    border-radius: 0;
+    background: #06102b;
+    color: #fff;
+    box-shadow: none;
+  }
+  [dir='rtl'] #sideDrawer.sarraf-desktop-nav { right: 280px; left: auto; }
+  [dir='ltr'] #sideDrawer.sarraf-desktop-nav { left: 280px; right: auto; }
+  .sarraf-mobile-menu { display: none !important; }
+  .sarraf-mobile-brand { display: none !important; }
+}
+
+@media (max-width: 639px) {
+  .sarraf-header-desktop-action { display: none !important; }
+  .sarraf-app-header .sarraf-profile-button > span:first-child { display: none; }
+}
+
+@media (max-width: 1023px) {
+  #sideDrawer.sarraf-desktop-nav { width: min(20rem, 88vw); }
 }
 .heroui-card:hover {
   border-color: rgba(59, 130, 246, 0.35);

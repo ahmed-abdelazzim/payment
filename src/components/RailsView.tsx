@@ -32,7 +32,7 @@ export const RailsView: React.FC<RailsViewProps> = ({
   };
 
   return (
-    <div className="py-6 pb-28 max-w-7xl mx-auto px-4 sm:px-6 flex flex-col gap-6">
+    <div className="py-8 pb-28 max-w-7xl mx-auto px-4 sm:px-6 flex flex-col gap-7 sarraf-shell">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-outline-variant/80 gap-3">
         <div>

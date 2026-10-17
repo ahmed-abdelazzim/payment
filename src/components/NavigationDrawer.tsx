@@ -19,6 +19,26 @@ interface NavigationDrawerProps {
   onToggleTheme?: () => void;
 }
 
+type NavItem = {
+  id: string;
+  icon: string;
+  ar: string;
+  en: string;
+  badge?: string;
+};
+
+const navItems: NavItem[] = [
+  { id: 'dashboard', icon: 'dashboard', ar: 'لوحة التحكم والسيولة', en: 'Liquidity dashboard' },
+  { id: 'ledger', icon: 'receipt_long', ar: 'دفتر المعاملات الفورية', en: 'Live transaction ledger' },
+  { id: 'analytics', icon: 'monitoring', ar: 'التحليلات والتقارير', en: 'Analytics & reports' },
+  { id: 'integrations', icon: 'storefront', ar: 'نقاط الربط والتكاملات', en: 'Gateway & integrations' },
+  { id: 'rails', icon: 'account_balance', ar: 'تسوية المحافظ والحدود', en: 'Wallets & limits' },
+  { id: 'devices', icon: 'devices', ar: 'أجهزة الالتقاط والربط', en: 'Capture device fleet' },
+  { id: 'audit', icon: 'shield_lock', ar: 'سجل الأمان والتدقيق', en: 'Security & audit log' },
+  { id: 'settings', icon: 'tune', ar: 'إعدادات مساحة العمل', en: 'Workspace settings' },
+  { id: 'subscriptions', icon: 'workspace_premium', ar: 'الباقات والاشتراك', en: 'Plans & subscription' },
+];
+
 export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   isOpen,
   onClose,
@@ -35,317 +55,139 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   theme,
   onToggleTheme,
 }) => {
+  const isArabic = language === 'ar';
+
   useEffect(() => {
     if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  const selectTab = (tab: string) => {
+    onSelectTab(tab);
+    onClose();
+  };
+
   return (
     <>
-      {/* Backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 transition-opacity"
-          onClick={onClose}
-        />
-      )}
+      {isOpen && <button className="fixed inset-0 sarraf-modal-backdrop z-50 lg:hidden" onClick={onClose} aria-label="Close navigation" />}
 
-      {/* Slide-out Drawer */}
       <aside
         id="sideDrawer"
-        className={`fixed inset-y-0 ${
-          language === 'ar' ? 'left-0 border-r' : 'right-0 border-l'
-        } w-80 max-w-full z-50 flex flex-col justify-between p-margin-mobile border-outline-variant bg-surface-container-lowest shadow-2xl transition-transform duration-200 ease-in-out ${
-          isOpen
-            ? 'translate-x-0'
-            : language === 'ar'
-            ? '-translate-x-full'
-            : 'translate-x-full'
+        className={`sarraf-desktop-nav fixed inset-y-0 ${isArabic ? 'right-0 border-l' : 'left-0 border-r'} w-[280px] max-w-[88vw] z-50 flex flex-col border-white/10 bg-[#06102b] text-white transition-transform duration-200 ease-out ${
+          isOpen ? 'translate-x-0' : isArabic ? 'translate-x-full' : '-translate-x-full'
         }`}
       >
-        {/* Header / Profile Area */}
-        <div className="space-y-space-md">
-          <div className="flex items-center justify-between pb-space-sm border-b border-outline-variant">
-            <div className="flex items-center gap-space-sm">
-              <div className="w-10 h-10 rounded-xl bg-primary text-on-primary flex items-center justify-center font-bold text-title-md">
-                {workspace.initials || workspace.name.slice(0, 2).toUpperCase()}
+        <div className="px-4 pt-4 pb-3 border-b border-white/10">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded bg-blue-600 text-white flex items-center justify-center font-black text-lg shrink-0">
+                ص
               </div>
-              <div className="overflow-hidden">
-                <h3 className="text-title-sm text-on-surface font-bold truncate">
-                  {language === 'ar' ? workspace.nameAr || workspace.name : workspace.name}
-                </h3>
-                <p className="text-label-xs text-on-surface-variant truncate">
-                  {currentUser?.email || workspace.subTitle}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-extrabold text-base tracking-tight truncate">Sarraf Ops</h2>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 sarraf-status-dot" />
+                </div>
+                <p className="text-[10px] text-slate-400 truncate">
+                  {isArabic ? 'بوابة إدارة السيولة والمطابقة' : 'Liquidity & reconciliation console'}
                 </p>
               </div>
             </div>
-            <button
-              onClick={onClose}
-              className="p-1 text-on-surface-variant hover:bg-surface-container rounded-lg"
-              aria-label="Close Drawer"
-            >
-              <span className="material-symbols-outlined text-xl">close</span>
+            <button onClick={onClose} className="lg:hidden w-8 h-8 rounded border border-white/10 text-slate-300 hover:bg-white/10" aria-label="Close Drawer">
+              <span className="material-symbols-outlined text-lg">close</span>
             </button>
           </div>
 
-          {/* User Role Card */}
+          <div className="mt-4 px-3 py-2.5 rounded bg-white/[0.055] border border-white/10">
+            <p className="text-[10px] text-slate-400">{isArabic ? 'مساحة العمل' : 'Workspace'}</p>
+            <div className="flex items-center justify-between gap-2 mt-0.5">
+              <p className="text-xs font-bold truncate">{isArabic ? workspace.nameAr || workspace.name : workspace.name}</p>
+              <span className="material-symbols-outlined text-sm text-blue-300">expand_more</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3">
+          <div className="flex items-center justify-between px-2 mb-2">
+            <span className="text-[9px] uppercase tracking-[0.16em] text-slate-500 font-bold">
+              {isArabic ? 'التشغيل' : 'Operations'}
+            </span>
+            <span className="text-[9px] text-emerald-300 font-code-num">v3.4</span>
+          </div>
+
+          <nav className="space-y-1" aria-label={isArabic ? 'التنقل الرئيسي' : 'Primary navigation'}>
+            {navItems.map((item) => {
+              const active = currentTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => selectTab(item.id)}
+                  className={`sarraf-nav-item ${active ? 'sarraf-nav-item-active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                >
+                  <span className="material-symbols-outlined text-[19px]">{item.icon}</span>
+                  <span className="flex-1 truncate">{isArabic ? item.ar : item.en}</span>
+                  {item.badge && <span className="sarraf-nav-badge">{item.badge}</span>}
+                </button>
+              );
+            })}
+
+            {currentUser?.isPlatformAdmin && (
+              <button onClick={() => selectTab('platform')} className={`sarraf-nav-item ${currentTab === 'platform' ? 'sarraf-nav-item-active' : ''}`}>
+                <span className="material-symbols-outlined text-[19px]">shield_person</span>
+                <span className="flex-1 truncate">{isArabic ? 'لوحة صاحب المنصة' : 'Platform owner console'}</span>
+              </button>
+            )}
+          </nav>
+
+          <button
+            onClick={() => {
+              onOpenOnboarding();
+              onClose();
+            }}
+            className="mt-4 w-full min-h-11 px-3 rounded bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-2 text-sm font-extrabold transition-colors"
+          >
+            <span className="material-symbols-outlined text-lg">bolt</span>
+            <span>{isArabic ? 'تشغيل دليل الإعداد' : 'Launch setup guide'}</span>
+          </button>
+        </div>
+
+        <div className="px-3 py-3 border-t border-white/10 space-y-2">
           {currentUser && (
-            <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant flex items-center justify-between gap-2">
+            <div className="px-3 py-2.5 rounded bg-white/[0.055] border border-white/10 flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <span className="text-label-xs text-on-surface-variant block">
-                  {language === 'ar' ? 'المستخدم الحالي' : 'Active Account'}
-                </span>
-                <span className="text-body-sm font-bold text-on-surface block truncate" dir="auto" title={currentUser.fullName}>
-                  {currentUser.fullName}
-                </span>
+                <p className="text-[10px] text-slate-400">{isArabic ? 'المستخدم الحالي' : 'Active account'}</p>
+                <p className="text-xs font-bold truncate" dir="auto">{currentUser.fullName}</p>
               </div>
               <RoleBadge role={currentUser.role} language={language} />
             </div>
           )}
 
-          {/* Meta status */}
-          <div className="p-2.5 rounded-xl bg-surface-container-low border border-outline-variant flex items-center justify-between">
-            <span className="text-label-sm text-on-surface-variant">
-              {language === 'ar' ? 'حالة اتصال الأجهزة' : 'Terminals Status'}
+          <div className="flex items-center justify-between px-3 py-2 text-[11px] text-slate-300">
+            <span className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${devicesOnlineCount > 0 ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+              {isArabic ? 'حالة الاتصال' : 'Connection'}
             </span>
-            <span className="text-label-sm font-code-num text-primary font-bold">
-              {devicesOnlineCount}/{totalDevicesCount} {language === 'ar' ? 'أجهزة متصلة' : 'Online'}
-            </span>
+            <span className="font-code-num font-bold">{devicesOnlineCount}/{totalDevicesCount}</span>
           </div>
 
-          {/* Drawer Navigation Tabs */}
-          <nav className="space-y-1">
-            <button
-              onClick={() => {
-                onSelectTab('dashboard');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'dashboard'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">dashboard</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'لوحة المراقبة الحية' : 'Live Dashboard'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('ledger');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'ledger'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">fact_check</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'طابور المطابقة والمعاملات' : 'Reconciliation Queue'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('analytics');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'analytics'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl text-primary">analytics</span>
-              <span className="text-body-md font-medium">
-                {language === 'ar' ? 'التحليلات والربط (Google Sheets)' : 'Analytics & Google Sheets'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('integrations');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'integrations'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl text-blue-500">storefront</span>
-              <span className="text-body-md font-semibold">
-                {language === 'ar' ? 'الربط وبوابة الدفع (المتاجر و API)' : 'Gateway & Integrations Hub'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('rails');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'rails'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">hub</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'مسارات التسوية والحدود' : 'Payment Sources & Limits'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('devices');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'devices'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">devices</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'أسطول أجهزة الدفع (POS)' : 'POS Terminal Fleet'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('audit');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'audit'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">admin_panel_settings</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'سجلات الأمان والتدقيق' : 'Audit & Security Logs'}
-              </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onSelectTab('settings');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'settings'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">settings</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'إعدادات المؤسسة والفريق' : 'Workspace & Team'}
-              </span>
-            </button>
-
-            {/* Subscriptions & Plans */}
-            <button
-              onClick={() => {
-                onSelectTab('subscriptions');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                currentTab === 'subscriptions'
-                  ? 'bg-surface-container text-primary font-semibold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl text-primary">workspace_premium</span>
-              <span className="text-body-md font-medium">
-                {language === 'ar' ? 'الباقات والاشتراك' : 'Plans & Subscriptions'}
-              </span>
-            </button>
-
-            {/* Platform Owner Console (Protected for Platform Master) */}
-            {currentUser?.isPlatformAdmin && (
-              <button
-                onClick={() => {
-                  onSelectTab('platform');
-                  onClose();
-                }}
-                className={`w-full flex items-center gap-space-sm px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right ${
-                  currentTab === 'platform'
-                    ? 'bg-primary/10 text-primary font-bold border-l-2 rtl:border-l-0 rtl:border-r-2 border-primary'
-                    : 'text-primary hover:bg-primary/5 font-semibold'
-                }`}
-              >
-                <span className="material-symbols-outlined text-xl">shield_person</span>
-                <span className="text-body-md">
-                  {language === 'ar' ? 'لوحة صاحب المنصة' : 'Platform Owner Console'}
-                </span>
+          <div className="grid grid-cols-3 gap-1.5">
+            {onToggleTheme && (
+              <button onClick={onToggleTheme} className="sarraf-nav-footer-button" title={isArabic ? 'تبديل المظهر' : 'Toggle theme'}>
+                <span className="material-symbols-outlined text-base">{theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
               </button>
             )}
-
-            <button
-              onClick={() => {
-                onOpenOnboarding();
-                onClose();
-              }}
-              className="w-full flex items-center gap-space-sm text-primary hover:bg-surface-container-low px-space-md py-space-sm rounded-lg transition-colors text-left rtl:text-right font-medium"
-            >
-              <span className="material-symbols-outlined text-xl">rocket_launch</span>
-              <span className="text-body-md">
-                {language === 'ar' ? 'دليل البدء والإعداد' : 'Setup Guide & Launchpad'}
-              </span>
+            <button onClick={onSwitchWorkspace} className="sarraf-nav-footer-button" title={isArabic ? 'تبديل مساحة العمل' : 'Switch workspace'}>
+              <span className="material-symbols-outlined text-base">swap_horiz</span>
             </button>
-          </nav>
-        </div>
-
-        {/* Drawer Footer Actions */}
-        <div className="border-t border-outline-variant pt-space-sm space-y-2">
-          {onToggleTheme && (
-            <button
-              onClick={onToggleTheme}
-              className="w-full py-2 bg-surface-container-low hover:bg-surface-container text-on-surface rounded-lg text-label-sm font-semibold border border-outline-variant flex items-center justify-between px-3 active:scale-95 transition-all cursor-pointer"
-            >
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-lg text-primary">
-                  {theme === 'dark' ? 'light_mode' : 'dark_mode'}
-                </span>
-                <span>
-                  {theme === 'dark'
-                    ? (language === 'ar' ? 'الوضع النهاري' : 'Light Mode')
-                    : (language === 'ar' ? 'الوضع الليلي (Night Mode)' : 'Night Mode')}
-                </span>
-              </div>
-              <span className="text-label-xs font-mono px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-bold">
-                {theme === 'dark' ? 'ON' : 'OFF'}
-              </span>
+            <button onClick={onLogout} className="sarraf-nav-footer-button text-red-300 hover:text-red-200" title={isArabic ? 'تسجيل الخروج' : 'Sign out'}>
+              <span className="material-symbols-outlined text-base">logout</span>
             </button>
-          )}
-
-          <button
-            onClick={onSwitchWorkspace}
-            className="w-full py-2 bg-surface-container-low hover:bg-surface-container text-on-surface rounded-lg text-label-sm font-semibold border border-outline-variant flex items-center justify-center gap-1.5 active:scale-95 transition-all"
-          >
-            <span className="material-symbols-outlined text-base">swap_horiz</span>
-            <span>{language === 'ar' ? 'تبديل مساحة العمل' : 'Switch Merchant Workspace'}</span>
-          </button>
-
-          <button
-            onClick={onLogout}
-            className="w-full py-2 text-error hover:bg-error-container/20 rounded-lg text-label-sm font-semibold border border-error/20 flex items-center justify-center gap-1.5 active:scale-95 transition-all"
-          >
-            <span className="material-symbols-outlined text-base">logout</span>
-            <span>{language === 'ar' ? 'تسجيل الخروج' : 'Sign Out'}</span>
-          </button>
+          </div>
         </div>
       </aside>
     </>

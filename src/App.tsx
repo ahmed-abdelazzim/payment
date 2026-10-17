@@ -441,7 +441,7 @@ export default function App() {
   const hasOfflineDevices = devices.some((d) => d.status === 'offline');
 
   return (
-    <div className="min-h-screen bg-background text-on-surface antialiased flex flex-col font-sans selection:bg-surface-container-highest selection:text-primary">
+    <div className="min-h-screen sarraf-shell sarraf-app-shell bg-background text-on-surface antialiased flex flex-col font-sans selection:bg-surface-container-highest selection:text-primary">
       {/* TopAppBar */}
       <Header
         workspace={workspace}

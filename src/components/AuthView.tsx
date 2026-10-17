@@ -195,7 +195,65 @@ export const AuthView: React.FC<AuthViewProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-surface-container-lowest flex flex-col justify-between p-4 sm:p-8">
+    <div className="sarraf-auth-shell min-h-screen sarraf-shell bg-surface-container-lowest">
+      <aside className="sarraf-auth-visual hidden lg:flex flex-col justify-between p-10 xl:p-14 text-white overflow-hidden relative">
+        <div className="sarraf-auth-grid absolute inset-0 opacity-30" aria-hidden="true" />
+        <div className="relative z-10 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded border border-white/20 bg-white/10 flex items-center justify-center">
+              <span className="material-symbols-outlined text-2xl">account_balance</span>
+            </div>
+            <div>
+              <p className="text-xl font-extrabold tracking-tight">Sarraf Ops | صرّاف</p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Egyptian payment rails engine</p>
+            </div>
+          </div>
+          <span className="px-3 py-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-300 text-[11px] font-bold">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 me-1.5" />
+            {language === 'ar' ? 'شبكة المدفوعات متصلة' : 'Payment rails connected'}
+          </span>
+        </div>
+
+        <div className="relative z-10 max-w-xl">
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-600/15 border border-blue-400/30 text-blue-200 text-xs font-bold mb-6">
+            <span className="material-symbols-outlined text-base">hub</span>
+            {language === 'ar' ? 'بنية تشغيل موحدة للمدفوعات' : 'Unified payment operations'}
+          </span>
+          <h2 className="text-4xl xl:text-5xl font-extrabold leading-tight tracking-tight">
+            {language === 'ar'
+              ? 'بنية تحتية موحدة لمطابقة مدفوعات إنستاباي والمحافظ الإلكترونية في مصر'
+              : 'One operating layer for Egypt’s instant payments and mobile wallets'}
+          </h2>
+          <p className="mt-5 text-slate-300 text-base leading-8">
+            {language === 'ar'
+              ? 'اجمع إشعارات التحويل، طابقها مع طلبات متجرك، وراقب السيولة والأجهزة من لوحة تشغيل واحدة.'
+              : 'Capture transfer notifications, reconcile store orders, and monitor liquidity and devices from one secure console.'}
+          </p>
+
+          <div className="mt-8 space-y-3">
+            {[
+              language === 'ar' ? 'تجربة مجانية لمدة 7 أيام مع هاتف التقاط واحد' : '7-day free trial with one capture phone',
+              language === 'ar' ? 'مطابقة لحظية لمسارات الدفع المصرية' : 'Real-time reconciliation across Egyptian rails',
+              language === 'ar' ? 'تشفير كامل بدون حفظ كلمات سر المحافظ' : 'Encrypted by design with no wallet passwords stored',
+            ].map((item) => (
+              <div key={item} className="flex items-center gap-3 px-4 py-3 rounded border border-white/15 bg-white/[0.045]">
+                <span className="w-6 h-6 rounded-full bg-emerald-500/15 text-emerald-300 flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined text-base">check</span>
+                </span>
+                <span className="text-sm font-semibold text-slate-100">{item}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative z-10 grid grid-cols-3 gap-3 text-[10px] text-slate-400 border-t border-white/10 pt-5">
+          <span>PCI-aware operations</span>
+          <span>TLS 1.3</span>
+          <span>{language === 'ar' ? 'استضافة محلية آمنة' : 'Secure regional hosting'}</span>
+        </div>
+      </aside>
+
+      <section className="sarraf-auth-panel min-h-screen flex flex-col justify-between p-4 sm:p-8">
       {/* Top Header */}
       <header className="max-w-5xl mx-auto w-full flex items-center justify-between pb-6 border-b border-outline-variant/60">
         <div className="flex items-center gap-2 text-primary">
@@ -594,6 +652,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
             : 'Commercial Payment Telemetry Platform'}
         </span>
       </footer>
+      </section>
     </div>
   );
 };

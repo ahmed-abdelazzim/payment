@@ -275,10 +275,10 @@ export const PairingModal: React.FC<PairingModalProps> = ({
             <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant space-y-2.5 text-xs text-on-surface-variant">
               <div className="flex items-center gap-1.5 font-bold text-on-surface">
                 <span className="material-symbols-outlined text-primary text-base">shield</span>
-                <span>{language === 'ar' ? 'إعداد آمن عبر تطبيق Sarraf Adapter' : 'Secure setup through the Sarraf Adapter'}</span>
+                <span>{language === 'ar' ? 'إعداد آمن بدون تطبيق إضافي' : 'Secure setup without an extra app'}</span>
               </div>
               <ol className="list-decimal list-inside space-y-1.5">
-                <li>{language === 'ar' ? 'افتح تطبيق Sarraf Adapter على هاتف الاستقبال واختر ربط جهاز.' : 'Open the Sarraf Adapter on the capture phone and choose Pair device.'}</li>
+                <li>{language === 'ar' ? 'لا يوجد تطبيق Sarraf Adapter مطلوب للتنزيل. استخدم قالب MacroDroid أو إعداد Apple Shortcuts حسب نوع هاتف الاستقبال.' : 'No Sarraf Adapter download is required. Use the MacroDroid template or Apple Shortcuts setup for the capture phone.'}</li>
                 <li>{language === 'ar' ? 'أدخل هذا الرمز مرة واحدة. سيستلم التطبيق بيانات الاعتماد المخصصة للجهاز.' : 'Enter this one-time code. The adapter will receive device-scoped credentials.'}</li>
                 <li>{language === 'ar' ? 'يوقّع التطبيق كل رسالة قبل إرسالها إلى المنصة؛ لا تستخدم روابط تحتوي على كود الاقتران.' : 'The adapter signs every message before sending it to the platform; do not use URLs containing a pairing code.'}</li>
               </ol>

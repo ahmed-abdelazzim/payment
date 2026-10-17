@@ -267,7 +267,7 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-margin-mobile sm:px-margin-desktop py-space-md sm:py-space-lg space-y-space-lg">
+    <div className="max-w-7xl mx-auto px-margin-mobile sm:px-margin-desktop py-8 sm:py-10 space-y-8 sarraf-shell">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-space-sm border-b border-outline-variant">
         <div>

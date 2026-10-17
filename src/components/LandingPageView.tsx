@@ -64,9 +64,9 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
   ];
 
   return (
-    <div className="min-h-screen bg-surface-container-lowest text-on-surface antialiased selection:bg-primary/20 selection:text-primary">
+    <div className="min-h-screen sarraf-shell bg-surface-container-lowest text-on-surface antialiased selection:bg-primary/20 selection:text-primary">
       {/* 1. Navigation Bar */}
-      <header className="sticky top-0 z-40 bg-surface-container-lowest/90 backdrop-blur-md border-b border-outline-variant">
+      <header className="sticky top-0 z-40 sarraf-glass-nav border-b border-outline-variant">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           {/* Brand */}
           <div className="flex items-center gap-3">
@@ -185,7 +185,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </header>
 
       {/* 2. Hero Section */}
-      <section className="relative pt-12 pb-16 sm:pt-20 sm:pb-24 overflow-hidden border-b border-outline-variant/60">
+      <section className="relative sarraf-hero-glow pt-12 pb-16 sm:pt-20 sm:pb-24 overflow-hidden border-b border-outline-variant/60">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 text-center">
           {/* Eyebrow */}
           <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-label-sm font-bold mb-6">
@@ -195,7 +195,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
 
           {/* Main Headline */}
           <h1 className="text-display-sm sm:text-display-md font-extrabold tracking-tight text-on-surface mb-6 leading-tight">
-            {language === 'ar' ? 'كل تحويل يوصلك… خليه واضح قدامك' : 'Every payment that arrives… crystal clear in front of you'}
+            {language === 'ar' ? <>كل تحويل يوصلك… <span className="sarraf-gradient-text">خليه واضح قدامك</span></> : <>Every payment that arrives… <span className="sarraf-gradient-text">crystal clear</span></>}
           </h1>
 
           {/* Subhead */}
@@ -209,7 +209,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3.5 mb-5">
             <button
               onClick={() => onNavigate(isLoggedIn ? '/app' : '/signup')}
-              className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-primary text-on-primary font-bold text-title-sm hover:bg-primary/90 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95"
+              className="sarraf-primary-btn w-full sm:w-auto px-7 py-3.5 rounded-xl bg-primary text-on-primary font-bold text-title-sm hover:bg-primary/90 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95"
             >
               <span className="material-symbols-outlined text-xl">rocket_launch</span>
               <span>{language === 'ar' ? 'ابدأ تجربتك المجانية' : 'Start Your Free Trial'}</span>
@@ -245,7 +245,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             </span>
           </div>
 
-          <div className="relative rounded-2xl border border-outline-variant bg-surface-container-low shadow-xl overflow-hidden p-4 sm:p-6">
+          <div className="relative rounded-2xl border border-outline-variant bg-surface-container-low shadow-xl sarraf-elevated overflow-hidden p-4 sm:p-6">
             {/* Mock Header Controls */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-outline-variant mb-4">
               <div className="flex items-center gap-2">
@@ -567,7 +567,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* WooCommerce Card */}
-            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-purple-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
+            <div className="sarraf-metric p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-purple-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center font-black text-xl">
                 W
               </div>
@@ -580,7 +580,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             </div>
 
             {/* Shopify Card */}
-            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-emerald-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
+            <div className="sarraf-metric p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-emerald-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center font-black text-xl">
                 S
               </div>
@@ -593,7 +593,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             </div>
 
             {/* Easy Orders Card */}
-            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-blue-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
+            <div className="sarraf-metric p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-blue-500/50 transition-all shadow-xs hover:shadow-md space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center font-black text-xl">
                 EO
               </div>
@@ -606,7 +606,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             </div>
 
             {/* Drop-in SDK & Custom Card */}
-            <div className="p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-primary/50 transition-all shadow-xs hover:shadow-md space-y-3">
+            <div className="sarraf-metric p-6 rounded-3xl bg-surface-container-lowest border border-outline-variant hover:border-primary/50 transition-all shadow-xs hover:shadow-md space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center font-black text-xl">
                 <span className="material-symbols-outlined text-2xl">code</span>
               </div>
@@ -741,7 +741,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             {/* Monthly 3 Phones */}
             <div className="flex flex-col">
               <div className="h-7 mb-2 hidden md:block" aria-hidden="true" />
-              <div className="rounded-2xl p-6 bg-surface-container-lowest border border-outline-variant flex flex-col justify-between hover:border-primary/50 transition-all shadow-xs flex-1">
+              <div className="sarraf-metric rounded-2xl p-6 bg-surface-container-lowest border border-outline-variant flex flex-col justify-between hover:border-primary/50 transition-all shadow-xs flex-1">
                 <div>
                   <h3 className="text-title-md font-bold text-on-surface mb-1">
                     {language === 'ar' ? 'الباقة الشهرية — 3 هواتف' : 'Monthly Plan — 3 Phones'}
@@ -791,7 +791,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
             {/* Monthly 5 Phones */}
             <div className="flex flex-col">
               <div className="h-7 mb-2 hidden md:block" aria-hidden="true" />
-              <div className="rounded-2xl p-6 bg-surface-container-lowest border border-outline-variant flex flex-col justify-between hover:border-primary/50 transition-all shadow-xs flex-1">
+              <div className="sarraf-metric rounded-2xl p-6 bg-surface-container-lowest border border-outline-variant flex flex-col justify-between hover:border-primary/50 transition-all shadow-xs flex-1">
                 <div>
                   <h3 className="text-title-md font-bold text-on-surface mb-1">
                     {language === 'ar' ? 'الباقة الشهرية — 5 هواتف' : 'Monthly Plan — 5 Phones'}
@@ -847,7 +847,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                 </span>
               </div>
 
-              <div className="rounded-2xl p-6 bg-surface-container-lowest border-2 border-primary flex flex-col justify-between shadow-lg ring-2 ring-primary/20 flex-1">
+              <div className="sarraf-metric rounded-2xl p-6 bg-surface-container-lowest border-2 border-primary flex flex-col justify-between shadow-lg ring-2 ring-primary/20 flex-1">
                 <div>
                   <h3 className="text-title-md font-bold text-on-surface mb-1">
                     {language === 'ar' ? 'الباقة السنوية — 10 هواتف' : 'Annual Plan — 10 Phones'}

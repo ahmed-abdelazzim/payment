@@ -77,7 +77,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
   };
 
   return (
-    <div className="py-6 pb-28 max-w-7xl mx-auto px-4 sm:px-6 flex flex-col gap-6">
+    <div className="py-8 pb-28 max-w-7xl mx-auto px-4 sm:px-6 flex flex-col gap-7 sarraf-shell">
       {/* Header Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-outline-variant/80 gap-4">
         <div>
@@ -184,8 +184,8 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
             </h3>
             <p className="text-body-sm text-on-surface-variant max-w-md mx-auto">
               {language === 'ar'
-                ? 'اربط هاتف كاشير محمول عبر تطبيق وكيل صرّاف أو MacroDroid لبدء الاستماع اللحظي لإشعارات الدفع.'
-                : 'Connect an Android (MacroDroid) or iOS device to start capturing SMS & push notifications.'}
+                ? 'لا تحتاج إلى تنزيل تطبيق باسم Sarraf Adapter. يمكنك ربط هاتف استقبال عبر قالب MacroDroid، أو إعداد Apple Shortcuts، أو استخدام جهاز وكيل Android مستقل عند توفره.'
+                : 'You do not need to download a separate app called Sarraf Adapter. Pair an Android phone with the MacroDroid template, configure Apple Shortcuts, or use a supported standalone Android agent when available.'}
             </p>
             <button
               onClick={handleStartPairing}
@@ -395,8 +395,8 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
             <div className="space-y-4 text-body-md text-on-surface">
               <p className="text-body-sm text-on-surface-variant">
                 {language === 'ar'
-                  ? 'قم بإدخال رمز الاقتران المؤقت في تطبيق وكيل Sarraf أو قالب MacroDroid على هاتف الأعمال:'
-                  : 'Enter this one-time pairing code into your Sarraf Mobile Agent or MacroDroid gateway profile:'}
+                  ? 'هذا الرمز مخصص لتهيئة طريقة الالتقاط التي اخترتها. لا يوجد تطبيق Sarraf Adapter مطلوب للتنزيل؛ استخدم قالب MacroDroid أو إعداد Apple Shortcuts، ثم أرسل أول حدث للتحقق من الاتصال:'
+                  : 'This code configures the capture method you choose. No Sarraf Adapter app download is required; use the MacroDroid template or Apple Shortcuts setup, then send a first event to verify the connection:'}
               </p>
 
               {/* Pairing Token Box */}
@@ -417,7 +417,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                 </div>
                 <ul className="list-disc list-inside text-on-surface-variant space-y-0.5">
                   <li>Android: MacroDroid Template with HMAC-SHA256 signature</li>
-                  <li>Android: Native Standalone Notification Service Agent</li>
+                  <li>{language === 'ar' ? 'Android: وكيل مستقل متاح عند توفير حزمة الجهاز المعتمدة' : 'Android: Standalone agent only when the approved device package is supplied'}</li>
                   <li>iOS: Apple Shortcuts Personal Message Automation Webhook</li>
                   <li>Huawei: EMUI Protected Background Ingestion Profile</li>
                 </ul>
