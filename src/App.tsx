@@ -287,6 +287,19 @@ export default function App() {
     );
   };
 
+  const handleRevokeDevice = async (deviceId: string) => {
+    let res: Response | null = null;
+    try {
+      res = await apiFetch(`/api/v1/devices/${deviceId}/revoke`, { method: 'POST' });
+    } catch {}
+    if (res?.ok) {
+      await refreshBackendData();
+      showToast(language === 'ar' ? 'تم إلغاء ربط الهاتف وإبطال المفتاح' : 'Phone connection and key revoked');
+      return;
+    }
+    showToast(await actionErrorMessage(res, 'تعذر إلغاء ربط الهاتف.', 'Could not revoke phone connection.'));
+  };
+
   const handleToggleRailPause = async (sourceId: string) => {
     try {
       const res = await apiFetch(`/api/v1/sources/${sourceId}/toggle-pause`, { method: 'POST' });
@@ -628,6 +641,7 @@ export default function App() {
           <DevicesView
             devices={devices}
             onToggleDeviceStatus={handleToggleDeviceStatus}
+            onRevokeDevice={handleRevokeDevice}
             onOpenPairDevice={() => setIsPairingOpen(true)}
             language={language}
           />
@@ -742,13 +756,12 @@ export default function App() {
       <PairingModal
         isOpen={isPairingOpen}
         onClose={() => setIsPairingOpen(false)}
-        onDevicePaired={(newDev) => {
-          setDevices((prev) => [newDev, ...prev]);
+        onCaptureSaved={(kind) => {
           refreshBackendData();
           showToast(
-            language === 'ar'
-              ? `تم إصدار كود الاقتران بنجاح للجهاز: ${newDev.name}`
-              : `Device registered: ${newDev.name}`
+            kind === 'device'
+              ? (language === 'ar' ? 'تم إنشاء بيانات ربط الهاتف؛ أكمل إعداد الأتمتة على جهازك' : 'Phone connection created; complete automation setup on your device')
+              : (language === 'ar' ? 'تم حفظ رسالة التحويل للمراجعة دون تأكيد الدفع تلقائيًا' : 'Payment message saved for review without automatic confirmation')
           );
         }}
         rails={rails}

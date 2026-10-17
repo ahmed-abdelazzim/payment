@@ -5,30 +5,19 @@ import { exportToCsv, exportToExcelTable, ExportColumn } from '../utils/exportUt
 interface DevicesViewProps {
   devices: Device[];
   onToggleDeviceStatus: (deviceId: string) => void;
-  onOpenPairDevice?: () => void;
+  onRevokeDevice: (deviceId: string) => void;
+  onOpenPairDevice: () => void;
   language: 'en' | 'ar';
 }
 
 export const DevicesView: React.FC<DevicesViewProps> = ({
   devices,
   onToggleDeviceStatus,
+  onRevokeDevice,
   onOpenPairDevice,
   language,
 }) => {
-  const [pairingModalOpen, setPairingModalOpen] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
-  const [pairingToken, setPairingToken] = useState<string>('');
-
-  const handleStartPairing = () => {
-    if (onOpenPairDevice) {
-      onOpenPairDevice();
-      return;
-    }
-    // Generate secure random pairing code as fallback
-    const token = 'SARRAF-' + Math.random().toString(36).substring(2, 6).toUpperCase() + '-' + Math.floor(1000 + Math.random() * 9000);
-    setPairingToken(token);
-    setPairingModalOpen(true);
-  };
 
   const handleExportCsv = () => {
     const columns: ExportColumn<Device>[] = [
@@ -118,11 +107,11 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
           </button>
 
           <button
-            onClick={handleStartPairing}
+            onClick={onOpenPairDevice}
             className="px-4 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold flex items-center justify-center gap-2 shadow-xs hover:bg-primary/90 active:scale-95 transition-all cursor-pointer"
           >
             <span className="material-symbols-outlined text-lg">add_circle</span>
-            <span>{language === 'ar' ? 'ربط جهاز دفع جديد' : 'Pair New Device'}</span>
+            <span>{language === 'ar' ? 'ربط هاتف أو إدخال رسالة' : 'Connect Phone or Enter Message'}</span>
           </button>
         </div>
       </div>
@@ -180,25 +169,26 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
               <span className="material-symbols-outlined text-3xl">phonelink_ring</span>
             </div>
             <h3 className="text-title-md font-bold text-on-surface">
-              {language === 'ar' ? 'لم يتم ربط أجهزة استقبال بعد' : 'No payment capture devices paired yet'}
+              {language === 'ar' ? 'لا توجد أجهزة التقاط تلقائي متصلة' : 'No automatic capture devices connected'}
             </h3>
             <p className="text-body-sm text-on-surface-variant max-w-md mx-auto">
               {language === 'ar'
-                ? 'لا تحتاج إلى تنزيل تطبيق باسم Sarraf Adapter. يمكنك ربط هاتف استقبال عبر قالب MacroDroid، أو إعداد Apple Shortcuts، أو استخدام جهاز وكيل Android مستقل عند توفره.'
-                : 'You do not need to download a separate app called Sarraf Adapter. Pair an Android phone with the MacroDroid template, configure Apple Shortcuts, or use a supported standalone Android agent when available.'}
+                ? 'اربط Android/Huawei عبر MacroDroid أو iPhone عبر Shortcuts بمفتاح خاص، أو انسخ الرسالة من متصفح الهاتف. اختبر الأتمتة على هاتفك قبل الاعتماد عليها.'
+                : 'Connect Android/Huawei using MacroDroid or iPhone using Shortcuts with a scoped key, or paste messages from your phone browser. Test the automation on your phone before relying on it.'}
             </p>
             <button
-              onClick={handleStartPairing}
+              onClick={onOpenPairDevice}
               className="px-5 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold inline-flex items-center gap-2 shadow-xs active:scale-95 transition-all cursor-pointer"
             >
               <span className="material-symbols-outlined text-lg">add_circle</span>
-              <span>{language === 'ar' ? 'ربط أول جهاز الآن' : 'Pair First Device'}</span>
+              <span>{language === 'ar' ? 'إعداد استقبال الرسائل' : 'Set Up Message Capture'}</span>
             </button>
           </div>
         ) : (
           devices.map((device) => {
             const isOnline = device.status === 'online';
-            const isLowBattery = device.batteryLevel <= 20;
+            const isWebhook = device.agentVersion === 'webhook-v1';
+            const isLowBattery = !isWebhook && device.batteryLevel <= 20;
 
             return (
               <div
@@ -224,7 +214,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-title-md font-bold text-on-surface font-code-num">
-                          {device.deviceNumber}
+                          {isWebhook ? device.name : device.deviceNumber}
                         </span>
                         <span
                           className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-label-xs font-bold ${
@@ -238,13 +228,15 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                               isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-error'
                             }`}
                           ></span>
-                          {isOnline
+                          {device.status === 'revoked'
+                            ? (language === 'ar' ? 'ملغى' : 'Revoked')
+                            : isOnline
                             ? language === 'ar'
-                              ? 'متصل'
-                              : 'Online'
+                              ? (isWebhook ? 'رسالة حديثة' : 'متصل')
+                              : (isWebhook ? 'Recent event' : 'Online')
                             : language === 'ar'
-                            ? 'غير متصل'
-                            : 'Offline'}
+                            ? (isWebhook ? 'لا توجد رسالة حديثة' : 'غير متصل')
+                            : (isWebhook ? 'No recent event' : 'Offline')}
                         </span>
                       </div>
 
@@ -255,7 +247,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                   </div>
 
                   {/* Battery Pill */}
-                  <div
+                  {!isWebhook && <div
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-label-xs font-code-num font-bold ${
                       isLowBattery
                         ? 'bg-error/10 text-error border border-error/30'
@@ -274,7 +266,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                         : 'battery_alert'}
                     </span>
                     <span>{device.batteryLevel}%</span>
-                  </div>
+                  </div>}
                 </div>
 
                 {/* Specs & Provider Details */}
@@ -310,18 +302,21 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                     </span>
                   </div>
 
-                  <div>
-                    <span className="block text-label-xs text-outline mb-0.5">
-                      {language === 'ar' ? 'حجم اليوم:' : 'Volume Today:'}
-                    </span>
-                    <span className="font-code-num text-on-surface font-bold">
-                      {device.volumeToday.toLocaleString('en-US')} ج.م
-                    </span>
-                  </div>
+                  {isWebhook ? <div>
+                    <span className="block text-label-xs text-outline mb-0.5">{language === 'ar' ? 'الرسائل الملتقطة:' : 'Captured messages:'}</span>
+                    <span className="font-code-num text-on-surface font-bold">{device.txnsToday}</span>
+                  </div> : <div>
+                    <span className="block text-label-xs text-outline mb-0.5">{language === 'ar' ? 'حجم اليوم:' : 'Volume Today:'}</span>
+                    <span className="font-code-num text-on-surface font-bold">{device.volumeToday.toLocaleString('en-US')} ج.م</span>
+                  </div>}
                 </div>
 
                 {/* Telemetry Proof & Permissions Truth */}
                 <div className="mt-3 p-2.5 rounded-xl bg-surface-container-low border border-outline-variant/60 flex items-center justify-between text-label-xs">
+                  {isWebhook ? <>
+                    <span className="text-on-surface-variant font-medium">{language === 'ar' ? 'التحقق من الهاتف:' : 'Phone verification:'}</span>
+                    <span className="text-amber-600 dark:text-amber-400 font-bold">{language === 'ar' ? 'وصول رسالة فقط؛ الصلاحيات غير مُثبتة' : 'Event received; permissions unverified'}</span>
+                  </> : <>
                   <span className="text-on-surface-variant font-medium">
                     {language === 'ar' ? 'صلاحية قراءة الرسائل:' : 'SMS/Notification Listener:'}
                   </span>
@@ -336,11 +331,12 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                       <span>{language === 'ar' ? 'في انتظار التحقق' : 'Needs Verification'}</span>
                     </span>
                   )}
+                  </>}
                 </div>
 
                 {/* Action Controls */}
                 <div className="mt-4 flex items-center justify-between gap-2 pt-3 border-t border-outline-variant/60">
-                  <button
+                  {!isWebhook && device.status !== 'revoked' && <button
                     onClick={() => onToggleDeviceStatus(device.id)}
                     className={`px-3 py-1.5 rounded-xl text-label-xs font-bold transition-all cursor-pointer active:scale-95 ${
                       isOnline
@@ -355,14 +351,14 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                       : language === 'ar'
                       ? 'إعادة التوصيل'
                       : 'Reconnect Device'}
-                  </button>
+                  </button>}
 
                   <button
                     onClick={() => setSelectedDevice(device)}
                     className="px-3 py-1.5 rounded-xl bg-surface-container-high hover:bg-surface-container text-on-surface text-label-xs font-semibold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
                   >
                     <span className="material-symbols-outlined text-sm">settings</span>
-                    <span>{language === 'ar' ? 'بيانات الاعتماد والـ HMAC' : 'HMAC Details'}</span>
+                    <span>{language === 'ar' ? 'إدارة الربط' : 'Manage Connection'}</span>
                   </button>
                 </div>
               </div>
@@ -370,71 +366,6 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
           })
         )}
       </div>
-
-      {/* Internal Pairing Fallback Modal */}
-      {pairingModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary text-2xl">
-                  qr_code_scanner
-                </span>
-                <h3 className="text-title-md font-bold text-on-surface">
-                  {language === 'ar' ? 'إعداد وكيل الدفع المحمول' : 'Pair New Payment Device'}
-                </h3>
-              </div>
-              <button
-                onClick={() => setPairingModalOpen(false)}
-                className="p-1 text-on-surface-variant hover:bg-surface-container rounded-lg cursor-pointer"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="space-y-4 text-body-md text-on-surface">
-              <p className="text-body-sm text-on-surface-variant">
-                {language === 'ar'
-                  ? 'هذا الرمز مخصص لتهيئة طريقة الالتقاط التي اخترتها. لا يوجد تطبيق Sarraf Adapter مطلوب للتنزيل؛ استخدم قالب MacroDroid أو إعداد Apple Shortcuts، ثم أرسل أول حدث للتحقق من الاتصال:'
-                  : 'This code configures the capture method you choose. No Sarraf Adapter app download is required; use the MacroDroid template or Apple Shortcuts setup, then send a first event to verify the connection:'}
-              </p>
-
-              {/* Pairing Token Box */}
-              <div className="p-4 bg-surface-container-low border border-primary/30 rounded-xl text-center">
-                <span className="text-label-xs text-outline uppercase tracking-wider block mb-1">
-                  {language === 'ar' ? 'رمز الاقتران المؤقت (صالح لـ 15 دقيقة)' : 'One-Time Pairing Token (15m expiry)'}
-                </span>
-                <span className="text-headline-md font-code-num font-extrabold text-primary tracking-widest select-all">
-                  {pairingToken}
-                </span>
-              </div>
-
-              {/* Supported Adapters list */}
-              <div className="p-3 bg-surface-container-low rounded-xl border border-outline-variant space-y-1.5 text-label-xs">
-                <div className="flex items-center justify-between font-bold text-on-surface">
-                  <span>{language === 'ar' ? 'مسارات الالتقاط المعتمدة:' : 'Supported Capture Paths:'}</span>
-                  <span className="text-primary font-code-num">v3.4 Protocol</span>
-                </div>
-                <ul className="list-disc list-inside text-on-surface-variant space-y-0.5">
-                  <li>Android: MacroDroid Template with HMAC-SHA256 signature</li>
-                  <li>{language === 'ar' ? 'Android: وكيل مستقل متاح عند توفير حزمة الجهاز المعتمدة' : 'Android: Standalone agent only when the approved device package is supplied'}</li>
-                  <li>iOS: Apple Shortcuts Personal Message Automation Webhook</li>
-                  <li>Huawei: EMUI Protected Background Ingestion Profile</li>
-                </ul>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-3 border-t border-outline-variant">
-              <button
-                onClick={() => setPairingModalOpen(false)}
-                className="px-4 py-2 bg-primary text-on-primary rounded-xl text-label-md font-bold active:scale-95 transition-all shadow-xs cursor-pointer"
-              >
-                {language === 'ar' ? 'إغلاق' : 'Close'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Device Config Modal */}
       {selectedDevice && (
@@ -461,10 +392,12 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
               </div>
               <div className="flex justify-between items-center text-label-sm border-b pb-2.5 border-outline-variant/50">
                 <span className="text-outline">
-                  {language === 'ar' ? 'حالة توقيع HMAC:' : 'HMAC Secret Status:'}
+                  {language === 'ar' ? 'طريقة الاعتماد:' : 'Authentication method:'}
                 </span>
                 <span className="font-code-num text-emerald-600 dark:text-emerald-400 font-bold">
-                  {language === 'ar' ? 'مفعّل ومؤمّن (Active)' : 'Provisioned (Active)'}
+                  {selectedDevice.agentVersion === 'webhook-v1'
+                    ? (language === 'ar' ? 'مفتاح ربط خاص؛ الرسائل للمراجعة' : 'Scoped key; messages require review')
+                    : (language === 'ar' ? 'توقيع HMAC للجهاز' : 'Device HMAC signature')}
                 </span>
               </div>
               <div className="flex justify-between items-center text-label-sm border-b pb-2.5 border-outline-variant/50">
@@ -482,7 +415,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
             </div>
 
             <div className="flex justify-between gap-2 pt-4 border-t border-outline-variant">
-              <button
+              {selectedDevice.agentVersion !== 'webhook-v1' && selectedDevice.status !== 'revoked' && <button
                 onClick={() => {
                   onToggleDeviceStatus(selectedDevice.id);
                   setSelectedDevice(null);
@@ -492,7 +425,18 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                 {selectedDevice.status === 'online'
                   ? language === 'ar' ? 'فصل الاتصال' : 'Force Offline'
                   : language === 'ar' ? 'توصيل الجهاز' : 'Mark Online'}
-              </button>
+              </button>}
+
+              {selectedDevice.status !== 'revoked' && <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(language === 'ar' ? 'إلغاء ربط هذا الهاتف وإبطال مفتاحه نهائيًا؟' : 'Revoke this phone and its key permanently?')) {
+                    onRevokeDevice(selectedDevice.id);
+                    setSelectedDevice(null);
+                  }
+                }}
+                className="px-3.5 py-2 bg-error-container text-error border border-error/30 rounded-xl text-label-sm font-bold"
+              >{language === 'ar' ? 'إلغاء الربط' : 'Revoke'}</button>}
 
               <button
                 onClick={() => setSelectedDevice(null)}

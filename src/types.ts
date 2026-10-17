@@ -38,7 +38,7 @@ export interface Device {
   provider: ProviderType;
   providerLabel: string;
   phoneNumber: string;
-  status: 'online' | 'offline' | 'warning';
+  status: 'online' | 'offline' | 'warning' | 'revoked';
   batteryLevel: number;
   lastPing: string;
   offlineDuration?: string;
@@ -46,6 +46,7 @@ export interface Device {
   volumeToday: number;
   agentVersion: string;
   configVersion: string;
+  adapterType?: string;
   verifiedAt?: string;
   notificationListenerGranted?: boolean;
   batteryOptimizationExempt?: boolean;

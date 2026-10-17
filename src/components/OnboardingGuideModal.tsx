@@ -100,16 +100,16 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
       num: 3,
       titleEn: 'Pair Message Capture Device',
       titleAr: 'ربط جهاز استقبال الإشعارات والرسائل',
-      descEn: 'Pair an Android (MacroDroid/Native Agent), Apple Shortcuts, or Huawei terminal via 15-min pairing code.',
-      descAr: 'اربط هاتف الاستقبال عبر كود اقتران مشفر لمدة 15 دقيقة، ليتم التقاط الرسائل تلقائياً.',
+      descEn: 'Configure MacroDroid or iPhone Shortcuts with a source-scoped key, or paste messages from the phone browser.',
+      descAr: 'اضبط MacroDroid أو اختصارات iPhone بمفتاح مرتبط بمصدر استقبال، أو أدخل الرسالة يدويًا من متصفح الهاتف.',
       isComplete: hasDevices,
       targetTab: 'devices',
       pageNameEn: 'Connected Devices Fleet',
       pageNameAr: 'أسطول أجهزة الربط والاستقبال',
       pageLinkEn: 'Open Devices page',
       pageLinkAr: 'الذهاب إلى صفحة أجهزة الربط',
-      actionTextEn: hasDevices ? 'Manage Devices' : 'Pair Device Now',
-      actionTextAr: hasDevices ? 'إدارة الأجهزة' : 'ربط جهاز جديد',
+      actionTextEn: hasDevices ? 'Manage Phones' : 'Set Up Phone',
+      actionTextAr: hasDevices ? 'إدارة الهواتف' : 'إعداد الهاتف',
       action: () => {
         onClose();
         onOpenPairDevice();
@@ -118,15 +118,15 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
     },
     {
       num: 4,
-      titleEn: 'Verify Telemetry & Permissions',
-      titleAr: 'التحقق من الاتصال وصلاحيات الالتقاط',
-      descEn: hasVerifiedPermissions
-        ? 'Verified telemetry proof received from device: Notification listener is active and battery optimization is exempt.'
-        : 'Device proof required: Notification listener permission and battery optimization exemption must be confirmed by device heartbeat.',
-      descAr: hasVerifiedPermissions
-        ? 'تم استلام دليل التحقق من الجهاز: صلاحية الاستماع للإشعارات نشطة وتوفير الطاقة معفى.'
-        : 'يتطلب دليلاً من الجهاز: يجب تأكيد تفعيل صلاحية قراءة الإشعارات وإلغاء توفير الطاقة عبر إشارة من الهاتف.',
-      isComplete: hasVerifiedPermissions,
+      titleEn: 'Verify Phone Capture',
+      titleAr: 'اختبار وصول الرسائل من الهاتف',
+      descEn: hasOnlineDevice
+        ? 'The server received an event from this phone. Test the bank/wallet message trigger and review the captured result.'
+        : 'Send a real bank/wallet message through your phone automation to verify that it reaches the review queue.',
+      descAr: hasOnlineDevice
+        ? 'استقبل الخادم حدثًا من الهاتف. اختبر تشغيل الأتمتة برسالة البنك أو المحفظة وراجع النتيجة.'
+        : 'أرسل رسالة بنك أو محفظة حقيقية من أتمتة الهاتف للتحقق من وصولها لقائمة المراجعة.',
+      isComplete: hasOnlineDevice || hasVerifiedPermissions,
       targetTab: 'devices',
       pageNameEn: 'Devices & Permissions',
       pageNameAr: 'فحص الأجهزة والصلاحيات',
@@ -161,8 +161,8 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
       num: 6,
       titleEn: 'Receive First Real Transfer',
       titleAr: 'استقبال أول تحويل حقيقي على الدفتر',
-      descEn: 'Your first customer transaction will be parsed, verified, reconciled, and displayed in real time.',
-      descAr: 'بمجرد وصول أول رسالة تحويل حقيقية، سيتم مطابقتها فلكياً وتحديث الرصيد اللحظي تلقائياً.',
+      descEn: 'Your first captured payment message will appear for review. Confirm it independently with your bank or wallet before approval.',
+      descAr: 'ستظهر أول رسالة تحويل في قائمة المراجعة. تأكد من وصول المبلغ في البنك أو المحفظة قبل اعتماد العملية.',
       isComplete: hasRealPayment,
       targetTab: 'ledger',
       pageNameEn: 'Live Transactions Ledger',
@@ -194,8 +194,8 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
               </h2>
               <p className="text-body-sm text-on-surface-variant">
                 {language === 'ar'
-                  ? '6 خطوات أساسية لتشغيل المراقبة الآلية الآمنة لاستقبال أموالك مع روابط مباشرة لصفحة كل إجراء'
-                  : '6 essential steps to automated and secure payment monitoring with direct links to each page'}
+                  ? '6 خطوات لإعداد استقبال رسائل الدفع ومراجعتها، مع روابط مباشرة لكل إجراء'
+                  : '6 steps to set up payment-message capture and review, with direct links for each action'}
               </p>
             </div>
           </div>

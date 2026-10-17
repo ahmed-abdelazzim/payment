@@ -663,8 +663,8 @@ export const PlatformDashboardView: React.FC<PlatformDashboardViewProps> = ({
               <li>
                 <strong className="text-on-surface">{language === 'ar' ? 'ربط هاتف صاحب المنصة:' : 'Owner Device Pairing:'}</strong>{' '}
                 {language === 'ar'
-                  ? 'قم بتنزيل التطبيق (MacroDroid أو Native Agent) على هاتفك الشخصي وربطه بالموقع بنفس رقم إنستاباي المسجل أعلاه كأي متجر عادي.'
-                  : 'Install the adapter on your personal phone and pair it to the platform with the above InstaPay number.'}
+                  ? 'يمكنك إعداد MacroDroid على أندرويد أو Shortcuts على iPhone لإرسال الإشعارات إلى مسار الالتقاط، ثم مراجعة كل تحويل داخل المنصة قبل اعتماده.'
+                  : 'Configure MacroDroid on Android or Shortcuts on iPhone to submit notifications, then review each transfer in the platform before approval.'}
               </li>
               <li>
                 <strong className="text-on-surface">{language === 'ar' ? 'المطابقة برقم هاتف المحول:' : 'Sender Phone Matching:'}</strong>{' '}

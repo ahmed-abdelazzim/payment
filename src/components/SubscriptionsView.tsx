@@ -207,8 +207,8 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
         };
       case 'macrodroid_agent':
         return {
-          ar: 'ربط هواتف أندرويد وماكرو درويد بكود اقتران مشفر 15 دقيقة',
-          en: 'Pairing Android terminals & MacroDroid via 15-min pairing code',
+          ar: 'ربط هاتف أندرويد عبر MacroDroid أو iPhone عبر Shortcuts بمفتاح مستقل',
+          en: 'Connect Android via MacroDroid or iPhone via Shortcuts with a scoped key',
           icon: 'phonelink_ring',
         };
       case 'hmac_security':

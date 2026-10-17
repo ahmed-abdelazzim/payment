@@ -199,6 +199,9 @@ export class ReconciliationService {
         // Quarantined into Review Queue; canonical balance does not advance until review.
         status = 'review_required';
         reconciliationState = hasAnomalyWarning ? 'gap_detected' : 'consistent';
+        if (input.adapterType === 'manual') {
+          reviewReason = 'Message copied manually from a phone; verify the transfer independently in the bank or wallet before approval.';
+        }
       } else if (!hasIndependentSettlementEvidence) {
         // Device HMAC proves that a registered device captured these bytes. It
         // does not prove bank settlement. Keep the message and its arithmetic

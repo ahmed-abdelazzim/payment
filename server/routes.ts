@@ -42,7 +42,7 @@ apiRouter.use((req, res, next) => {
   }
 
   // Exempt device telemetry & ingestion
-  if (req.path === '/devices/ingest' || /^\/devices\/[^/]+\/telemetry$/.test(req.path)) {
+  if (req.path === '/devices/ingest' || req.path === '/capture-links/ingest' || /^\/devices\/[^/]+\/telemetry$/.test(req.path)) {
     next();
     return;
   }
@@ -1316,15 +1316,202 @@ apiRouter.post('/rails/:id/toggle-pause', requireAuth, requireRole(['owner', 'ad
 apiRouter.get('/devices', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const rows = db.prepare(`
-    SELECT d.id, d.payment_source_id, d.device_number, d.friendly_name, d.location, d.adapter_type, d.status,
+    SELECT d.id, d.payment_source_id, d.device_number, d.friendly_name, d.location, d.adapter_type,
+           CASE WHEN d.status = 'revoked' THEN 'revoked'
+             WHEN d.agent_version = 'webhook-v1' AND (d.last_seen_at IS NULL OR d.last_seen_at < datetime('now', '-15 minutes'))
+             THEN 'offline' ELSE d.status END as status,
            d.battery_level, d.last_seen_at, d.agent_version, d.config_version,
            d.verified_at, d.notification_listener_granted, d.battery_optimization_exempt,
-           (SELECT COUNT(*) FROM transactions t WHERE t.organization_id = d.organization_id) as txns_count
+           s.provider, s.wallet_number,
+           (SELECT COUNT(*) FROM transactions t JOIN raw_events r ON r.id = t.raw_event_id
+              WHERE t.organization_id = d.organization_id AND r.device_id = d.id) as txns_count
     FROM devices d
+    LEFT JOIN payment_sources s ON s.id = d.payment_source_id AND s.organization_id = d.organization_id
     WHERE d.organization_id = ?
     ORDER BY d.created_at ASC
   `).all(req.user!.organizationId);
   res.json(rows);
+});
+
+// No-code Android/iOS phone automations use a source-scoped bearer token.
+// This proves possession of a token, not the authenticity of a bank SMS.
+apiRouter.post('/capture-links', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const paymentSourceId = typeof req.body?.paymentSourceId === 'string' ? req.body.paymentSourceId.trim() : '';
+  const adapterType = req.body?.adapterType;
+  const friendlyName = typeof req.body?.friendlyName === 'string' ? req.body.friendlyName.trim() : '';
+  if (!paymentSourceId || !['macrodroid', 'apple_shortcuts', 'huawei_emui'].includes(adapterType) || friendlyName.length < 2 || friendlyName.length > 100) {
+    res.status(400).json({ error: 'INVALID_CAPTURE_LINK', message: 'Choose a source, phone type, and device name.' });
+    return;
+  }
+  const db = getDatabase();
+  db.exec('BEGIN IMMEDIATE;');
+  try {
+    const source = db.prepare('SELECT id FROM payment_sources WHERE id = ? AND organization_id = ? AND retired_at IS NULL').get(paymentSourceId, req.user!.organizationId);
+    if (!source) {
+      db.exec('ROLLBACK;');
+      res.status(404).json({ error: 'PAYMENT_SOURCE_NOT_FOUND' });
+      return;
+    }
+    const entitlement = SubscriptionService.checkDeviceLimit(req.user!.organizationId);
+    if (!entitlement.allowed || entitlement.subscriptionStatus === 'inactive') {
+      db.exec('ROLLBACK;');
+      res.status(403).json({ error: 'DEVICE_LIMIT_OR_SUBSCRIPTION_EXPIRED', message: 'No available phone slot in the current subscription.', ...entitlement });
+      return;
+    }
+    const deviceId = `dev_${crypto.randomUUID()}`;
+    const rawToken = `cap_${crypto.randomBytes(32).toString('base64url')}`;
+    const tokenId = `ctl_${crypto.randomUUID()}`;
+    db.prepare(`INSERT INTO devices (id, organization_id, payment_source_id, device_number, friendly_name, location, adapter_type, status, agent_version)
+                VALUES (?, ?, ?, ?, ?, 'Phone automation', ?, 'offline', 'webhook-v1')`)
+      .run(deviceId, req.user!.organizationId, paymentSourceId, deviceId, friendlyName, adapterType);
+    db.prepare(`INSERT INTO capture_link_tokens (id, token_hash, organization_id, device_id, payment_source_id)
+                VALUES (?, ?, ?, ?, ?)`)
+      .run(tokenId, hashOpaqueToken(rawToken), req.user!.organizationId, deviceId, paymentSourceId);
+    AuditService.record({ organizationId: req.user!.organizationId, actorIdentity: req.user!.email,
+      action: 'CAPTURE_LINK_CREATED', resourceType: 'device', resourceId: deviceId, originIp: req.ip,
+      details: { paymentSourceId, adapterType } });
+    db.exec('COMMIT;');
+    res.set('Cache-Control', 'no-store');
+    res.status(201).json({ deviceId, token: rawToken, endpoint: '/api/v1/capture-links/ingest' });
+  } catch (error) {
+    db.exec('ROLLBACK;');
+    console.error('[CaptureLink] Creation failed:', error);
+    res.status(500).json({ error: 'CAPTURE_LINK_CREATE_FAILED' });
+  }
+});
+
+apiRouter.post('/capture-links/ingest', (req: Request, res: Response) => {
+  const auth = req.header('Authorization') || '';
+  const token = auth.startsWith('Bearer cap_') ? auth.slice('Bearer '.length) : '';
+  if (!/^cap_[A-Za-z0-9_-]{43}$/.test(token)) {
+    res.status(401).json({ error: 'INVALID_CAPTURE_TOKEN' });
+    return;
+  }
+  const rawContent = typeof req.body?.raw_content === 'string' ? req.body.raw_content.trim() : '';
+  if (rawContent.length < 10 || rawContent.length > 2000) {
+    res.status(400).json({ error: 'INVALID_CAPTURE', message: 'raw_content must contain 10–2000 characters.' });
+    return;
+  }
+  const db = getDatabase();
+  const binding = db.prepare(`SELECT c.organization_id, c.device_id, c.payment_source_id, d.adapter_type, d.status, s.provider
+    FROM capture_link_tokens c JOIN devices d ON d.id = c.device_id AND d.organization_id = c.organization_id
+    JOIN payment_sources s ON s.id = c.payment_source_id AND s.organization_id = c.organization_id
+    WHERE c.token_hash = ? AND c.revoked_at IS NULL`).get(hashOpaqueToken(token)) as {
+      organization_id: string; device_id: string; payment_source_id: string;
+      adapter_type: string; status: string; provider: string;
+    } | undefined;
+  if (!binding || binding.status === 'revoked') {
+    res.status(401).json({ error: 'CAPTURE_TOKEN_REVOKED_OR_UNKNOWN' });
+    return;
+  }
+  if (binding.organization_id !== 'org_platform_ops') {
+    const sub = SubscriptionService.getOrganizationSubscription(binding.organization_id);
+    if (sub.status === 'trial_expired' || sub.status === 'expired' || sub.status === 'inactive') {
+      res.status(403).json({ error: 'SUBSCRIPTION_EXPIRED' });
+      return;
+    }
+  }
+  const rawEventId = `raw_link_${crypto.randomUUID()}`;
+  const capturedAt = new Date().toISOString();
+  db.prepare(`INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
+              VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')`)
+    .run(rawEventId, binding.organization_id, binding.device_id, binding.adapter_type, crypto.randomUUID(), capturedAt, rawContent);
+  db.prepare("UPDATE devices SET status = 'online', last_seen_at = datetime('now') WHERE id = ?").run(binding.device_id);
+  try {
+    const parsed = parseEgyptianPaymentMessage(rawContent, binding.provider);
+    if (!parsed.isFinancialTransaction) {
+      db.prepare('UPDATE raw_events SET processing_status = ? WHERE id = ?').run(`filtered_${parsed.messageCategory}`, rawEventId);
+      res.json({ status: 'filtered', rawEventId });
+      return;
+    }
+    const result = ReconciliationService.processInboundTransaction({
+      organizationId: binding.organization_id, deviceId: binding.device_id,
+      paymentSourceId: binding.payment_source_id, rawEventId,
+      adapterType: binding.adapter_type, boundPaymentAddress: '', parsed, financialEventAt: capturedAt,
+    });
+    if (result.isDuplicate) db.prepare("UPDATE raw_events SET processing_status = 'duplicate' WHERE id = ?").run(rawEventId);
+    res.status(result.isDuplicate ? 200 : 201).json({ status: result.isDuplicate ? 'duplicate' : 'review_required', transactionId: result.transactionId });
+  } catch (error) {
+    console.error('[CaptureLink] Ingestion failed:', error);
+    db.prepare("UPDATE raw_events SET processing_status = 'review_required_processing_error' WHERE id = ?").run(rawEventId);
+    res.status(500).json({ error: 'CAPTURE_PROCESSING_FAILED', rawEventId });
+  }
+});
+
+// A phone browser can submit a copied bank/wallet message without a capture
+// adapter. This is an operator claim, never device or bank settlement proof.
+apiRouter.post('/manual-captures', requireAuth, requireRole(['owner', 'admin', 'manager']), (req: AuthenticatedUserRequest, res: Response) => {
+  const paymentSourceId = typeof req.body?.paymentSourceId === 'string' ? req.body.paymentSourceId.trim() : '';
+  const rawContent = typeof req.body?.rawContent === 'string' ? req.body.rawContent.trim() : '';
+  if (!paymentSourceId || rawContent.length < 10 || rawContent.length > 2000) {
+    res.status(400).json({ error: 'INVALID_CAPTURE', message: 'Choose a receiving source and paste a payment message of 10–2000 characters.' });
+    return;
+  }
+
+  const db = getDatabase();
+  const source = db.prepare(`
+    SELECT id, provider FROM payment_sources
+    WHERE id = ? AND organization_id = ? AND retired_at IS NULL
+  `).get(paymentSourceId, req.user!.organizationId) as { id: string; provider: string } | undefined;
+  if (!source) {
+    res.status(404).json({ error: 'PAYMENT_SOURCE_NOT_FOUND', message: 'This receiving source does not belong to your workspace.' });
+    return;
+  }
+
+  if (req.user!.organizationId !== 'org_platform_ops') {
+    const subscription = SubscriptionService.getOrganizationSubscription(req.user!.organizationId);
+    if (subscription.status === 'trial_expired' || subscription.status === 'expired' || subscription.status === 'inactive') {
+      res.status(403).json({ error: 'TRIAL_EXPIRED', message: 'Your trial or subscription has expired.' });
+      return;
+    }
+  }
+
+  const parsed = parseEgyptianPaymentMessage(rawContent, source.provider);
+  if (!parsed.isFinancialTransaction) {
+    res.status(422).json({ error: 'NOT_INBOUND_PAYMENT', message: 'This message does not describe an incoming payment.' });
+    return;
+  }
+
+  const rawEventId = `raw_manual_${crypto.randomUUID()}`;
+  const capturedAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
+    VALUES (?, ?, NULL, 'manual', ?, ?, ?, 'manual_submitted')
+  `).run(rawEventId, req.user!.organizationId, crypto.randomUUID(), capturedAt, rawContent);
+
+  try {
+    const result = ReconciliationService.processInboundTransaction({
+      organizationId: req.user!.organizationId,
+      deviceId: '',
+      paymentSourceId: source.id,
+      rawEventId,
+      adapterType: 'manual',
+      boundPaymentAddress: '',
+      parsed,
+      financialEventAt: capturedAt,
+    });
+    if (result.isDuplicate) {
+      db.prepare("UPDATE raw_events SET processing_status = 'duplicate' WHERE id = ?").run(rawEventId);
+    }
+    AuditService.record({
+      organizationId: req.user!.organizationId,
+      actorIdentity: req.user!.email,
+      action: 'MANUAL_PAYMENT_MESSAGE_SUBMITTED',
+      resourceType: 'raw_event',
+      resourceId: rawEventId,
+      originIp: req.ip,
+      details: { paymentSourceId: source.id, transactionId: result.transactionId, duplicate: result.isDuplicate },
+    });
+    res.status(result.isDuplicate ? 200 : 201).json({
+      status: result.isDuplicate ? 'duplicate' : 'review_required',
+      transactionId: result.transactionId,
+      message: result.isDuplicate ? 'This payment reference is already recorded.' : 'Message saved for operator review. No balance or customer payment was confirmed.',
+    });
+  } catch (error) {
+    console.error('[ManualCapture] Reconciliation failed:', error);
+    db.prepare("UPDATE raw_events SET processing_status = 'review_required_processing_error' WHERE id = ?").run(rawEventId);
+    res.status(500).json({ error: 'MANUAL_CAPTURE_FAILED', message: 'Message saved for inspection, but processing failed. Please contact support.' });
+  }
 });
 
 // Device Telemetry Heartbeat & Permissions Verification (signed by the paired device)
@@ -1801,6 +1988,8 @@ apiRouter.post('/devices/:id/revoke', requireAuth, requireRole(['owner', 'admin'
     UPDATE device_credentials SET revoked_at = datetime('now')
     WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE organization_id = ?)
   `).run(req.params.id, req.user!.organizationId);
+  db.prepare(`UPDATE capture_link_tokens SET revoked_at = datetime('now')
+    WHERE device_id = ? AND organization_id = ?`).run(req.params.id, req.user!.organizationId);
 
   AuditService.record({
     organizationId: req.user!.organizationId,
@@ -1819,6 +2008,10 @@ apiRouter.post('/devices/:id/toggle', requireAuth, requireRole(['owner', 'admin'
   const current = db.prepare('SELECT status FROM devices WHERE id = ? AND organization_id = ?').get(req.params.id, req.user!.organizationId) as any;
   if (!current) {
     res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+  if (current.status === 'revoked') {
+    res.status(409).json({ error: 'DEVICE_REVOKED', message: 'A revoked phone must be connected with a new token.' });
     return;
   }
   const nextStatus = current.status === 'online' ? 'offline' : 'online';

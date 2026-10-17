@@ -242,6 +242,20 @@ export function initSchema(db: DatabaseSync): void {
       FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
     );
 
+    -- Scoped tokens for no-code phone automations. Only digests are persisted.
+    CREATE TABLE IF NOT EXISTS capture_link_tokens (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      organization_id TEXT NOT NULL,
+      device_id TEXT NOT NULL UNIQUE,
+      payment_source_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      revoked_at TEXT,
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+      FOREIGN KEY (payment_source_id) REFERENCES payment_sources(id) ON DELETE CASCADE
+    );
+
     -- Pairing Tokens (Temporary 15-Minute Expiry)
     CREATE TABLE IF NOT EXISTS pairing_tokens (
       token TEXT PRIMARY KEY,

@@ -704,8 +704,8 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
                 </h4>
                 <p className="text-body-xs text-on-surface-variant leading-relaxed max-w-2xl">
                   {language === 'ar'
-                    ? 'فتح الموقع من الآيفون يتيح لك إدارة حسابك ومتابعة التحويلات بالكامل. أما التقاط رسائل الدفع الخلفية فيتطلب جهاز استقبال متوافق (مثل هاتف أندرويد مستقل مخصص للعمل يعمل بتطبيق الالتقاط المعتمد).'
-                    : 'Opening the web app from an iPhone enables full dashboard access and management. Real-time background SMS capture requires a compatible receiving terminal (such as an independent Android device running MacroDroid/Sarraf Agent).'}
+                    ? 'افتح المنصة من أي هاتف. يمكن إعداد MacroDroid على Android/Huawei أو أتمتة الرسائل في Shortcuts على iPhone لإرسال الرسائل للمراجعة؛ اختبرها على جهازك أولًا. الإدخال اليدوي من المتصفح متاح أيضًا.'
+                    : 'Open the platform from any phone. MacroDroid on Android/Huawei or a Shortcuts message automation on iPhone can submit messages for review; test it on your own device first. Manual browser entry is also available.'}
                 </p>
               </div>
             </div>

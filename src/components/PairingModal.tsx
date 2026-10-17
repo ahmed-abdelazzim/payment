@@ -1,43 +1,34 @@
-import React, { useState, useEffect } from 'react';
-import { Device, ProviderRail } from '../types';
+import React, { useEffect, useState } from 'react';
+import { ProviderRail } from '../types';
 import { apiFetch } from '../api';
 
 interface PairingModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onDevicePaired: (device: Device) => void;
+  onCaptureSaved: (kind: 'device' | 'message') => void;
   rails: ProviderRail[];
   language: 'en' | 'ar';
 }
 
-export const PairingModal: React.FC<PairingModalProps> = ({
-  isOpen,
-  onClose,
-  onDevicePaired,
-  rails,
-  language,
-}) => {
-  const [friendlyName, setFriendlyName] = useState('');
-  const [deviceIdentifier, setDeviceIdentifier] = useState(`POS-${Math.floor(100 + Math.random() * 900)}`);
-  const [location, setLocation] = useState('');
-  const [adapterType, setAdapterType] = useState<'macrodroid' | 'native_agent' | 'apple_shortcuts' | 'huawei_emui'>('macrodroid');
+export const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, onCaptureSaved, rails, language }) => {
+  const [mode, setMode] = useState<'automation' | 'manual'>('automation');
   const [paymentSourceId, setPaymentSourceId] = useState('');
+  const [adapterType, setAdapterType] = useState<'macrodroid' | 'apple_shortcuts' | 'huawei_emui'>('macrodroid');
+  const [friendlyName, setFriendlyName] = useState('');
+  const [captureCredential, setCaptureCredential] = useState<{ token: string; endpoint: string } | null>(null);
+  const [rawContent, setRawContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
-  // Result state
-  const [pairingResult, setPairingResult] = useState<{
-    deviceId: string;
-    pairingCode: string;
-    expiresAt: string;
-  } | null>(null);
-  const [copiedCode, setCopiedCode] = useState(false);
-
-  // ESC key to close
   useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+    if (!isOpen) {
+      setCaptureCredential(null);
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -45,262 +36,171 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!paymentSourceId) {
-      setError(language === 'ar' ? 'اختر محفظة أو حساب الاستقبال الذي سيتبعه هذا الجهاز.' : 'Select the receiving source this device will monitor.');
-      return;
-    }
+  const handleCapture = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
     setError(null);
-
+    setSaved(false);
     try {
-      const res = await apiFetch('/api/v1/devices', {
+      const response = await apiFetch('/api/v1/manual-captures', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          friendlyName,
-          deviceIdentifier,
-          location: location || 'Main Terminal Gate',
-          adapterType,
-          paymentSourceId,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentSourceId, rawContent }),
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || 'Failed to issue pairing code');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to save the message.');
+      if (result.status === 'duplicate') {
+        setError(language === 'ar' ? 'هذه العملية مسجلة بالفعل؛ لم تُضف مرة ثانية.' : 'This payment is already recorded; it was not added twice.');
+      } else {
+        setSaved(true);
+        setRawContent('');
+        onCaptureSaved('message');
       }
-
-      setPairingResult({
-        deviceId: data.deviceId,
-        pairingCode: data.pairingCode,
-        expiresAt: data.expiresAt,
-      });
-
-      const selectedRail = rails.find((rail) => rail.id === paymentSourceId);
-      onDevicePaired({
-        id: data.deviceId,
-        deviceNumber: deviceIdentifier,
-        name: friendlyName,
-        location: location || 'Main Terminal',
-        provider: selectedRail?.provider || 'vodafone_cash',
-        providerLabel: selectedRail?.name || 'Receiving source',
-        phoneNumber: selectedRail?.walletNumber || '',
-        status: 'online',
-        batteryLevel: 100,
-        lastPing: 'Just paired',
-        txnsToday: 0,
-        volumeToday: 0,
-        agentVersion: 'v3.4.1-eg',
-        configVersion: 'cfg-v1.4',
-      });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Connection error');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCopyCode = () => {
-    if (pairingResult) {
-      navigator.clipboard.writeText(pairingResult.pairingCode);
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
+  const copyMobileLink = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/app?tab=devices`);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2500);
+    } catch {
+      setError(language === 'ar' ? 'تعذر نسخ الرابط. افتح نفس عنوان الموقع على هاتفك.' : 'Could not copy the link. Open this site on your phone.');
+    }
+  };
+
+  const createCaptureLink = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    setCaptureCredential(null);
+    try {
+      const response = await apiFetch('/api/v1/capture-links', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentSourceId, adapterType, friendlyName }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || result.error || 'Could not create the connection.');
+      setCaptureCredential({ token: result.token, endpoint: `${window.location.origin}${result.endpoint}` });
+      onCaptureSaved('device');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Connection error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyText = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2500);
+    } catch {
+      setError(language === 'ar' ? 'تعذر النسخ. انسخ النص يدويًا.' : 'Could not copy. Select the text manually.');
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in-95">
-        <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
-          <div className="flex items-center gap-2 text-primary">
-            <span className="material-symbols-outlined text-2xl">phonelink_ring</span>
-            <h3 className="text-title-md font-bold text-on-surface">
-              {language === 'ar' ? 'ربط جهاز استقبال رسائل الدفع' : 'Pair Payment Capture Device'}
-            </h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sarraf-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="mobile-capture-title" className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl border border-outline-variant bg-surface-container-lowest p-5 sm:p-6 sarraf-modal space-y-5">
+        <div className="flex items-start justify-between gap-3 border-b border-outline-variant pb-4">
+          <div>
+            <h2 id="mobile-capture-title" className="text-title-md font-bold text-on-surface">
+              {language === 'ar' ? 'ربط هاتف استقبال رسائل الدفع' : 'Connect a payment capture phone'}
+            </h2>
+            <p className="text-body-sm text-on-surface-variant mt-1">
+              {language === 'ar' ? 'اختَر أتمتة الهاتف أو الإدخال اليدوي من المتصفح. لا تحتاج تطبيق Sarraf Adapter.' : 'Choose a phone automation or browser entry. No Sarraf Adapter app is required.'}
+            </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-on-surface-variant hover:bg-surface-container"
-          >
-            <span className="material-symbols-outlined text-xl">close</span>
+          <button type="button" onClick={onClose} aria-label={language === 'ar' ? 'إغلاق' : 'Close'} className="p-2 rounded-lg hover:bg-surface-container text-on-surface-variant">
+            <span className="material-symbols-outlined">close</span>
           </button>
         </div>
 
-        {error && (
-          <div className="p-3 rounded-lg bg-error-container/20 text-error text-body-sm flex items-center gap-2">
-            <span className="material-symbols-outlined text-base">error</span>
-            <span>{error}</span>
-          </div>
-        )}
+        <div className="grid grid-cols-2 gap-2" role="tablist" aria-label={language === 'ar' ? 'طريقة الربط' : 'Capture method'}>
+          <button type="button" role="tab" aria-selected={mode === 'automation'} onClick={() => { setMode('automation'); setError(null); }} className={`rounded-lg px-3 py-2 text-label-sm font-bold border ${mode === 'automation' ? 'bg-primary text-on-primary border-primary' : 'border-outline-variant text-on-surface'}`}>{language === 'ar' ? 'أتمتة الهاتف' : 'Phone automation'}</button>
+          <button type="button" role="tab" aria-selected={mode === 'manual'} onClick={() => { setMode('manual'); setError(null); }} className={`rounded-lg px-3 py-2 text-label-sm font-bold border ${mode === 'manual' ? 'bg-primary text-on-primary border-primary' : 'border-outline-variant text-on-surface'}`}>{language === 'ar' ? 'إدخال يدوي' : 'Manual entry'}</button>
+        </div>
 
-        {!pairingResult ? (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-label-md text-on-surface font-medium mb-1">
-                {language === 'ar' ? 'اسم الجهاز التعريفي' : 'Device Friendly Name'}
-              </label>
-              <input
-                type="text"
-                required
-                value={friendlyName}
-                onChange={(e) => setFriendlyName(e.target.value)}
-                placeholder={language === 'ar' ? 'هاتف كاشير المعادي 1' : 'Maadi POS Main Phone'}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-label-md text-on-surface font-medium mb-1">
-                  {language === 'ar' ? 'معرّف الجهاز (Terminal ID)' : 'Terminal Identifier'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={deviceIdentifier}
-                  onChange={(e) => setDeviceIdentifier(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest font-code-num text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-label-md text-on-surface font-medium mb-1">
-                  {language === 'ar' ? 'الموقع / الفرع' : 'Location / Branch'}
-                </label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder={language === 'ar' ? 'فرع المهندسين' : 'Downtown Branch'}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-label-md text-on-surface font-medium mb-1">
-                {language === 'ar' ? 'محفظة أو حساب الاستقبال المرتبط بالجهاز' : 'Receiving source monitored by this device'}
-              </label>
-              <select
-                required
-                value={paymentSourceId}
-                onChange={(e) => setPaymentSourceId(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
-              >
-                <option value="">
-                  {language === 'ar' ? 'اختر مصدر الاستقبال' : 'Select a receiving source'}
-                </option>
-                {rails.map((rail) => (
-                  <option key={rail.id} value={rail.id}>
-                    {rail.name} · {rail.walletNumber}
-                  </option>
-                ))}
-              </select>
-              {rails.length === 0 && (
-                <p className="mt-1.5 text-label-sm text-error">
-                  {language === 'ar' ? 'أضف مصدر استقبال أولاً قبل ربط هاتف.' : 'Add a receiving source before pairing a phone.'}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-label-md text-on-surface font-medium mb-1">
-                {language === 'ar' ? 'نوع نظام التشغيل ومحوّل الالتقاط' : 'Operating System & Adapter'}
-              </label>
-              <select
-                value={adapterType}
-                onChange={(e) => setAdapterType(e.target.value as any)}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:ring-2 focus:ring-primary focus:outline-none"
-              >
-                <option value="macrodroid">Android - MacroDroid (مستقر وموصى به)</option>
-                <option value="native_agent">Android - Native Daemon Agent (خدمة خلفية بدون واجهة)</option>
-                <option value="apple_shortcuts">Apple iOS - Shortcuts Webhook (التقاط عبر الاختصارات)</option>
-                <option value="huawei_emui">Huawei EMUI / HarmonyOS (استثناء PowerGenie)</option>
-              </select>
-            </div>
-
-            <div className="p-3 rounded-lg bg-surface-container-low border border-outline-variant/60 text-label-sm text-on-surface-variant">
-              {language === 'ar'
-                ? 'سيتم توليد كود اقتران مشفر صالح لمدة 15 دقيقة لربط الجهاز بالخادم بأمان.'
-                : 'A cryptographic one-time pairing code valid for 15 minutes will be issued.'}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 rounded-lg text-label-md font-semibold text-on-surface-variant hover:bg-surface-container"
-              >
-                {language === 'ar' ? 'إلغاء' : 'Cancel'}
-              </button>
-              <button
-                type="submit"
-                disabled={loading || rails.length === 0}
-                className="px-5 py-2.5 rounded-lg bg-primary text-on-primary text-label-md font-semibold hover:bg-primary/90 transition-all flex items-center gap-2 disabled:opacity-50"
-              >
-                {loading ? (
-                  <span className="material-symbols-outlined animate-spin text-base">progress_activity</span>
-                ) : (
-                  <span className="material-symbols-outlined text-base">vpn_key</span>
-                )}
-                <span>{language === 'ar' ? 'توليد كود الاقتران' : 'Generate Pairing Code'}</span>
-              </button>
-            </div>
-          </form>
-        ) : (
+        {mode === 'automation' ? (
           <div className="space-y-4">
-            <div className="p-5 rounded-2xl bg-surface-container-low border border-outline-variant text-center space-y-2">
-              <span className="text-label-sm text-on-surface-variant block">
-                {language === 'ar' ? 'كود الاقتران السريع (صالح لمدة 15 دقيقة)' : 'One-Time Pairing Code (Expires in 15m)'}
-              </span>
-              <div className="text-display-sm font-bold font-code-num text-primary tracking-widest py-1">
-                {pairingResult.pairingCode}
-              </div>
-              <button
-                type="button"
-                onClick={handleCopyCode}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-surface-container border border-outline-variant text-label-sm font-medium hover:bg-surface-container-high transition-all"
-              >
-                <span className="material-symbols-outlined text-sm">
-                  {copiedCode ? 'check' : 'content_copy'}
-                </span>
-                <span>{copiedCode ? (language === 'ar' ? 'تم النسخ!' : 'Copied!') : (language === 'ar' ? 'نسخ الكود' : 'Copy Code')}</span>
-              </button>
-            </div>
-
-            <div className="p-4 rounded-xl bg-surface-container-low border border-outline-variant space-y-2.5 text-xs text-on-surface-variant">
-              <div className="flex items-center gap-1.5 font-bold text-on-surface">
-                <span className="material-symbols-outlined text-primary text-base">shield</span>
-                <span>{language === 'ar' ? 'إعداد آمن بدون تطبيق إضافي' : 'Secure setup without an extra app'}</span>
-              </div>
-              <ol className="list-decimal list-inside space-y-1.5">
-                <li>{language === 'ar' ? 'لا يوجد تطبيق Sarraf Adapter مطلوب للتنزيل. استخدم قالب MacroDroid أو إعداد Apple Shortcuts حسب نوع هاتف الاستقبال.' : 'No Sarraf Adapter download is required. Use the MacroDroid template or Apple Shortcuts setup for the capture phone.'}</li>
-                <li>{language === 'ar' ? 'أدخل هذا الرمز مرة واحدة. سيستلم التطبيق بيانات الاعتماد المخصصة للجهاز.' : 'Enter this one-time code. The adapter will receive device-scoped credentials.'}</li>
-                <li>{language === 'ar' ? 'يوقّع التطبيق كل رسالة قبل إرسالها إلى المنصة؛ لا تستخدم روابط تحتوي على كود الاقتران.' : 'The adapter signs every message before sending it to the platform; do not use URLs containing a pairing code.'}</li>
-              </ol>
-              <p className="pt-1 text-[11px]">
-                {language === 'ar'
-                  ? 'فعّل صلاحية قراءة الإشعارات أو الرسائل واستثنِ التطبيق من توفير البطارية حسب نظام الهاتف.'
-                  : 'Grant the required notification/SMS permission and exempt the adapter from battery optimization for this phone.'}
-              </p>
-            </div>
-
-            <div className="pt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-5 py-2.5 rounded-lg bg-primary text-on-primary text-label-md font-semibold hover:bg-primary/90 transition-all"
-              >
-                {language === 'ar' ? 'تم، إغلاق والعودة للأجهزة' : 'Done, Back to Terminals'}
-              </button>
-            </div>
+            <p className="text-body-sm text-on-surface-variant">{language === 'ar' ? 'استخدم MacroDroid على Android/Huawei أو تطبيق Shortcuts المدمج في iPhone. يُحفظ كل إشعار للمراجعة فقط؛ لا يؤكد دفع العميل تلقائيًا.' : 'Use MacroDroid on Android/Huawei or the built-in Shortcuts app on iPhone. Every message enters review; it never confirms customer payment automatically.'}</p>
+            <form onSubmit={createCaptureLink} className="space-y-3">
+              <label className="block text-label-sm font-semibold text-on-surface">{language === 'ar' ? 'نوع الهاتف' : 'Phone type'}
+                <select value={adapterType} onChange={(event) => setAdapterType(event.target.value as typeof adapterType)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-on-surface">
+                  <option value="macrodroid">Android · MacroDroid</option>
+                  <option value="huawei_emui">Huawei · MacroDroid</option>
+                  <option value="apple_shortcuts">iPhone · Apple Shortcuts</option>
+                </select>
+              </label>
+              <label className="block text-label-sm font-semibold text-on-surface">{language === 'ar' ? 'اسم الهاتف' : 'Phone name'}
+                <input required minLength={2} maxLength={100} value={friendlyName} onChange={(event) => setFriendlyName(event.target.value)} placeholder={language === 'ar' ? 'مثال: هاتف استقبال المتجر' : 'Example: Shop receiver phone'} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-on-surface" />
+              </label>
+              <label className="block text-label-sm font-semibold text-on-surface">{language === 'ar' ? 'مصدر الاستقبال المرتبط بهذا الهاتف' : 'Receiving source for this phone'}
+                <select required value={paymentSourceId} onChange={(event) => setPaymentSourceId(event.target.value)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-on-surface">
+                  <option value="">{language === 'ar' ? 'اختر المحفظة أو حساب إنستاباي' : 'Choose wallet or InstaPay account'}</option>
+                  {rails.map((rail) => <option key={rail.id} value={rail.id}>{rail.name} · {rail.walletNumber}</option>)}
+                </select>
+              </label>
+              <button type="submit" disabled={loading || rails.length === 0} className="w-full rounded-lg bg-primary px-4 py-3 font-bold text-on-primary disabled:opacity-50">{loading ? (language === 'ar' ? 'جارٍ الإنشاء…' : 'Creating…') : (language === 'ar' ? 'إنشاء بيانات ربط الهاتف' : 'Create phone connection')}</button>
+            </form>
+            {captureCredential && <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+              <p className="text-body-sm font-bold text-on-surface">{language === 'ar' ? 'احتفظ بالمفتاح الآن؛ لن يظهر بعد إغلاق هذه النافذة.' : 'Save this key now; it will not be shown after closing.'}</p>
+              <div><span className="text-label-xs block mb-1">POST URL</span><code className="block break-all text-body-sm select-all">{captureCredential.endpoint}</code><button type="button" onClick={() => copyText(captureCredential.endpoint)} className="text-primary underline text-label-sm">{language === 'ar' ? 'نسخ الرابط' : 'Copy URL'}</button></div>
+              <div><span className="text-label-xs block mb-1">Authorization header</span><code className="block break-all text-body-sm select-all">Bearer {captureCredential.token}</code><button type="button" onClick={() => copyText(`Bearer ${captureCredential.token}`)} className="text-primary underline text-label-sm">{language === 'ar' ? 'نسخ قيمة الهيدر' : 'Copy header value'}</button></div>
+              <div><span className="text-label-xs block mb-1">Content-Type: application/json · Body</span><code className="block break-all text-body-sm select-all">{'{"raw_content":"<MESSAGE_BODY>"}'}</code></div>
+              <p className="text-body-sm text-on-surface-variant">{language === 'ar' ? 'ضع نص الرسالة الفعلي مكان <MESSAGE_BODY> من قائمة متغيرات أداة الأتمتة. لا تضع المفتاح في الرابط ولا ترسله لأحد.' : 'Insert the actual received message body from the automation variable picker. Keep the key out of the URL and do not share it.'}</p>
+              <p className="text-body-sm text-on-surface-variant">{adapterType === 'apple_shortcuts'
+                ? (language === 'ar' ? 'في Shortcuts: Automation ← Message ← اختر مرسل البنك أو المحفظة ← Get Contents of URL ← POST ← أضف الهيدرَين أعلاه وJSON body بنص الرسالة الواردة. جرّبها برسالة حقيقية على هاتفك؛ سلوك أتمتة الرسائل يختلف حسب إصدار iOS.' : 'In Shortcuts: Automation → Message → choose bank/wallet sender → Get Contents of URL → POST → add the headers and JSON body using the incoming message. Validate on the physical iPhone; message automation behavior varies by iOS version.')
+                : (language === 'ar' ? 'في MacroDroid: أنشئ Macro بـ Trigger: SMS Received أو Notification Received للتطبيق البنكي، ثم Action: HTTP Request POST. ضع الرابط والهيدرَين وJSON body أعلاه، واختر متغير نص الرسالة من MacroDroid. جرّب استقبال رسالة حقيقية.' : 'In MacroDroid: use SMS Received or bank-app Notification Received as trigger, then HTTP Request POST with the URL, headers and JSON body above. Insert the message-text variable from MacroDroid and test with a real message.')}</p>
+              <p className="text-body-xs text-on-surface-variant">{language === 'ar' ? 'اختبر أن العملية تظهر في قائمة «تحتاج مراجعة». إلغاء الهاتف من صفحة الأجهزة يبطل المفتاح فورًا.' : 'Verify the event appears in Review Required. Revoking the phone in Devices immediately disables the key.'}</p>
+            </div>}
+            {error && <p role="alert" className="text-body-sm text-error">{error}</p>}
+            {rails.length === 0 && <p className="text-body-sm text-on-surface-variant">{language === 'ar' ? 'أضف مصدر استقبال أولًا.' : 'Add a receiving source first.'}</p>}
           </div>
+        ) : (
+        <>
+
+        <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 space-y-2">
+          <div className="font-bold text-primary flex items-center gap-2"><span className="material-symbols-outlined text-lg">phone_iphone</span>{language === 'ar' ? 'من متصفح أي هاتف — متاح الآن' : 'Any phone browser — available now'}</div>
+          <ol className="list-decimal list-inside text-body-sm text-on-surface-variant space-y-1">
+            <li>{language === 'ar' ? 'افتح نفس الموقع على هاتف الاستقبال وسجّل دخولك.' : 'Open this site on the capture phone and sign in.'}</li>
+            <li>{language === 'ar' ? 'انسخ رسالة التحويل الحقيقية من تطبيق الرسائل أو الإشعارات.' : 'Copy the actual transfer message from SMS or notifications.'}</li>
+            <li>{language === 'ar' ? 'اختر محفظة الاستقبال، والصق الرسالة، ثم احفظها للمراجعة.' : 'Select the receiving wallet, paste the message, and save it for review.'}</li>
+          </ol>
+          <button type="button" onClick={copyMobileLink} className="inline-flex items-center gap-2 rounded-lg border border-primary/25 px-3 py-2 text-label-sm font-semibold text-primary hover:bg-primary/10">
+            <span className="material-symbols-outlined text-base">content_copy</span>{linkCopied ? (language === 'ar' ? 'تم نسخ رابط الموقع' : 'Link copied') : (language === 'ar' ? 'نسخ رابط الموقع للهاتف' : 'Copy mobile site link')}
+          </button>
+        </div>
+
+        <form onSubmit={handleCapture} className="space-y-4">
+          <div>
+            <label htmlFor="manual-payment-source" className="block text-label-md font-semibold mb-1 text-on-surface">{language === 'ar' ? 'مصدر الاستقبال' : 'Receiving source'}</label>
+            <select id="manual-payment-source" required value={paymentSourceId} onChange={(event) => setPaymentSourceId(event.target.value)} className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-on-surface">
+              <option value="">{language === 'ar' ? 'اختر المحفظة أو حساب إنستاباي' : 'Choose wallet or InstaPay account'}</option>
+              {rails.map((rail) => <option key={rail.id} value={rail.id}>{rail.name} · {rail.walletNumber}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="manual-payment-message" className="block text-label-md font-semibold mb-1 text-on-surface">{language === 'ar' ? 'نص رسالة التحويل' : 'Transfer message'}</label>
+            <textarea id="manual-payment-message" required minLength={10} maxLength={2000} rows={5} value={rawContent} onChange={(event) => setRawContent(event.target.value)} placeholder={language === 'ar' ? 'الصق نص الرسالة كما وصل إلى هاتفك…' : 'Paste the message exactly as received on your phone…'} className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-3 py-2.5 text-on-surface resize-y" />
+          </div>
+          {error && <p role="alert" className="text-body-sm text-error">{error}</p>}
+          {saved && <p role="status" className="text-body-sm text-emerald-600 dark:text-emerald-400">{language === 'ar' ? 'تم حفظ الرسالة في قائمة المراجعة. لا يُعتمد التحويل إلا بعد التحقق المستقل من البنك أو المحفظة.' : 'Saved to the review queue. Confirm the transfer independently with the bank or wallet before approval.'}</p>}
+          {rails.length === 0 && <p className="text-body-sm text-on-surface-variant">{language === 'ar' ? 'أضف مصدر استقبال من صفحة المحافظ أولًا.' : 'Add a receiving source from the wallets page first.'}</p>}
+          <button type="submit" disabled={loading || rails.length === 0} className="w-full rounded-lg bg-primary px-4 py-3 font-bold text-on-primary disabled:opacity-50">
+            {loading ? (language === 'ar' ? 'جارٍ الحفظ…' : 'Saving…') : (language === 'ar' ? 'حفظ الرسالة للمراجعة' : 'Save message for review')}
+          </button>
+        </form>
+
+        </>
         )}
-      </div>
+      </section>
     </div>
   );
 };
