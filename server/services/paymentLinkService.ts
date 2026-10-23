@@ -38,6 +38,15 @@ export class PaymentLinkService {
     const id = `plink_${crypto.randomBytes(8).toString('hex')}`;
     const db = getDatabase();
 
+    let sanitizedRedirectUrl: string | null = null;
+    if (data.redirectUrl && data.redirectUrl.trim()) {
+      const trimmed = data.redirectUrl.trim();
+      if (!/^https?:\/\//i.test(trimmed)) {
+        throw new Error('INVALID_REDIRECT_URL: Redirect URL must start with http:// or https://');
+      }
+      sanitizedRedirectUrl = trimmed;
+    }
+
     db.prepare(`
       INSERT INTO payment_links (
         id, organization_id, title, description, amount_minor, currency, is_active, reusable, redirect_url
@@ -49,7 +58,7 @@ export class PaymentLinkService {
       data.description ? data.description.trim() : null,
       amountMinor,
       data.reusable !== false ? 1 : 0,
-      data.redirectUrl ? data.redirectUrl.trim() : null
+      sanitizedRedirectUrl
     );
 
     return this.getPaymentLink(id)!;

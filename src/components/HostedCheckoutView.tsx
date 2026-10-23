@@ -121,15 +121,22 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
     }
   };
 
+  const isSafeUrl = (url?: string | null): boolean => {
+    if (!url) return false;
+    return /^https?:\/\//i.test(url.trim());
+  };
+
   // Redirect countdown when confirmed
   useEffect(() => {
-    if (session?.status !== 'confirmed' || !session?.returnUrl) return;
+    if (session?.status !== 'confirmed' || !session?.returnUrl || !isSafeUrl(session.returnUrl)) return;
 
     const timer = setInterval(() => {
       setRedirectCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          window.location.href = session.returnUrl!;
+          if (isSafeUrl(session.returnUrl)) {
+            window.location.href = session.returnUrl!;
+          }
           return 0;
         }
         return prev - 1;
@@ -139,10 +146,14 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
     return () => clearInterval(timer);
   }, [session?.status, session?.returnUrl]);
 
-  const copyToClipboard = (text: string, field: 'number' | 'amount') => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2500);
+  const copyToClipboard = async (text: string, field: 'number' | 'amount') => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(field);
+      setTimeout(() => setCopiedField(null), 2500);
+    } catch (err) {
+      console.error('Clipboard copy failed:', err);
+    }
   };
 
   const handleClaim = async (e: React.FormEvent) => {
@@ -272,7 +283,7 @@ export const HostedCheckoutView: React.FC<HostedCheckoutViewProps> = ({ sessionI
             <span>{language === 'ar' ? 'مشاركة إيصال الدفع عبر واتساب' : 'Share Receipt via WhatsApp'}</span>
           </button>
 
-          {session.returnUrl ? (
+          {session.returnUrl && isSafeUrl(session.returnUrl) ? (
             <div className="space-y-3">
               <a
                 href={session.returnUrl}

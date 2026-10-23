@@ -79,6 +79,21 @@ export class CheckoutService {
       }
     }
 
+    const isSafeUrl = (url?: string | null): boolean => {
+      if (!url) return true;
+      return /^https?:\/\//i.test(url.trim());
+    };
+
+    if (params.returnUrl && !isSafeUrl(params.returnUrl)) {
+      throw new Error('INVALID_RETURN_URL: returnUrl must start with http:// or https://');
+    }
+    if (params.cancelUrl && !isSafeUrl(params.cancelUrl)) {
+      throw new Error('INVALID_CANCEL_URL: cancelUrl must start with http:// or https://');
+    }
+    if (params.webhookUrl && !isSafeUrl(params.webhookUrl)) {
+      throw new Error('INVALID_WEBHOOK_URL: webhookUrl must start with http:// or https://');
+    }
+
     const minutes = params.expiresInMinutes && params.expiresInMinutes > 0 ? params.expiresInMinutes : 30;
     const expiresAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
 
