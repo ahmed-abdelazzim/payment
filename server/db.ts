@@ -244,11 +244,13 @@ export function initSchema(db: DatabaseSync): void {
       id TEXT PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE,
       organization_id TEXT NOT NULL,
+      created_by_user_id TEXT,
       device_id TEXT NOT NULL UNIQUE,
       payment_source_id TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       revoked_at TEXT,
       FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
       FOREIGN KEY (payment_source_id) REFERENCES payment_sources(id) ON DELETE CASCADE
     );
@@ -275,6 +277,7 @@ export function initSchema(db: DatabaseSync): void {
       client_timestamp TEXT NOT NULL,
       server_received_at TEXT NOT NULL DEFAULT (datetime('now')),
       raw_payload TEXT NOT NULL,
+      capture_metadata_json TEXT,
       processing_status TEXT DEFAULT 'unprocessed',
       FOREIGN KEY (organization_id) REFERENCES organizations(id),
       FOREIGN KEY (device_id) REFERENCES devices(id),
@@ -596,6 +599,7 @@ export function initSchema(db: DatabaseSync): void {
   // Versioned migrations. Must run before any code below reads or writes
   // money columns by their new names.
   migrateMoneyToMinorUnits(db);
+  migratePaymentSourcesUniqueIndex(db);
   try {
     db.prepare("ALTER TABLE organizations ADD COLUMN wallet_routing_strategy TEXT DEFAULT 'smart_cascading'").run();
   } catch {}
@@ -622,6 +626,12 @@ export function initSchema(db: DatabaseSync): void {
   } catch {}
   try {
     db.prepare('ALTER TABLE devices ADD COLUMN last_telemetry_payload TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE raw_events ADD COLUMN capture_metadata_json TEXT').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE capture_link_tokens ADD COLUMN created_by_user_id TEXT').run();
   } catch {}
   try {
     db.prepare('ALTER TABLE devices ADD COLUMN payment_source_id TEXT').run();
@@ -1159,3 +1169,101 @@ export function migrateMoneyToMinorUnits(db: DatabaseSync): void {
     db.exec('PRAGMA foreign_keys = ON;');
   }
 }
+
+export interface DuplicateSourceInfo {
+  organization_id: string;
+  wallet_number: string;
+  count: number;
+  ids: string;
+}
+
+/**
+ * Version 2 Migration (BUG-005):
+ * Safely creates unique index idx_payment_sources_org_wallet_active.
+ * - Detects active duplicates (where retired_at IS NULL).
+ * - Never deletes data.
+ * - If duplicates exist, either auto-retires later duplicate instances if configured (AUTO_RETIRE_DUPLICATE_SOURCES=true),
+ *   or halts startup with a clear, descriptive error listing the conflicting organization, wallet, and record IDs.
+ */
+export function migratePaymentSourcesUniqueIndex(db: DatabaseSync, autoRetireDuplicates: boolean = false): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      details TEXT,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Check if index already exists
+  const indexCheck = db.prepare(`
+    SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_payment_sources_org_wallet_active'
+  `).get() as { name: string } | undefined;
+
+  if (indexCheck) {
+    db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, name, details) VALUES (2, 'payment_sources_unique_active_index', 'index already exists')`).run();
+    return;
+  }
+
+  // 1. Detect duplicates where retired_at IS NULL
+  const duplicates = db.prepare(`
+    SELECT organization_id, wallet_number, COUNT(*) AS count, GROUP_CONCAT(id, ', ') AS ids
+    FROM payment_sources
+    WHERE retired_at IS NULL
+    GROUP BY organization_id, wallet_number
+    HAVING count > 1
+  `).all() as any[] as DuplicateSourceInfo[];
+
+  if (duplicates.length > 0) {
+    const shouldAutoRetire = autoRetireDuplicates || process.env.AUTO_RETIRE_DUPLICATE_SOURCES === 'true';
+    if (!shouldAutoRetire) {
+      const summary = duplicates
+        .map((d) => `Org: ${d.organization_id}, Wallet: ${d.wallet_number}, Count: ${d.count}, IDs: [${d.ids}]`)
+        .join('; ');
+      const msg = `MIGRATION_V2_DUPLICATE_PAYMENT_SOURCES: Existing database contains duplicate active payment sources: ${summary}. Cannot create unique index 'idx_payment_sources_org_wallet_active' without resolving duplicates. Halting deployment to prevent data corruption. Resolve duplicates or set AUTO_RETIRE_DUPLICATE_SOURCES=true to archive them safely without data deletion.`;
+      console.error(msg);
+      throw new Error(msg);
+    }
+
+    // Safely archive (retire) the later duplicate instances without deleting any historical financial records
+    db.exec('BEGIN IMMEDIATE;');
+    try {
+      const archived: string[] = [];
+      for (const dup of duplicates) {
+        const idList = dup.ids.split(', ').map((s) => s.trim());
+        const toRetire = idList.slice(1);
+        for (const rid of toRetire) {
+          db.prepare(`
+            UPDATE payment_sources
+            SET retired_at = datetime('now'),
+                is_paused_for_new_instructions = 1
+            WHERE id = ?
+          `).run(rid);
+          archived.push(rid);
+        }
+      }
+      db.exec(`
+        CREATE UNIQUE INDEX idx_payment_sources_org_wallet_active 
+        ON payment_sources(organization_id, wallet_number) 
+        WHERE retired_at IS NULL;
+      `);
+      db.prepare(`INSERT OR REPLACE INTO schema_migrations (version, name, details) VALUES (2, 'payment_sources_unique_active_index', ?)`)
+        .run(JSON.stringify({ autoArchivedDuplicateSourceIds: archived }));
+      db.exec('COMMIT;');
+      console.log(`[MIGRATION V2] Successfully archived ${archived.length} duplicate active sources and created idx_payment_sources_org_wallet_active.`);
+      return;
+    } catch (err) {
+      db.exec('ROLLBACK;');
+      throw err;
+    }
+  }
+
+  // 2. No duplicates: safe to create index directly
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_sources_org_wallet_active 
+    ON payment_sources(organization_id, wallet_number) 
+    WHERE retired_at IS NULL;
+  `);
+  db.prepare(`INSERT OR REPLACE INTO schema_migrations (version, name, details) VALUES (2, 'payment_sources_unique_active_index', 'applied cleanly')`).run();
+}
+
