@@ -9,6 +9,8 @@ interface LedgerViewProps {
   onOpenReview: (tx: Transaction) => void;
   onConfirmTransaction: (tx: Transaction) => void;
   language: 'en' | 'ar';
+  isError?: boolean;
+  onRetry?: () => void;
 }
 
 export const LedgerView: React.FC<LedgerViewProps> = ({
@@ -18,6 +20,8 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   onOpenReview,
   onConfirmTransaction,
   language,
+  isError,
+  onRetry,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'confirmed' | 'review_required' | 'failed'>('all');
@@ -299,19 +303,44 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
         {/* Transaction List (8 Cols on Desktop) */}
         <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-3" role="list">
           {filteredList.length === 0 ? (
-            <div className="p-12 text-center bg-surface-container-lowest border border-outline-variant rounded-2xl space-y-4 shadow-xs">
-              <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-xs">
-                <span className="material-symbols-outlined text-3xl">receipt_long</span>
+            isError ? (
+              <div className="p-12 text-center bg-error-container/10 border border-error/30 rounded-2xl space-y-4 shadow-xs">
+                <div className="w-14 h-14 rounded-2xl bg-error/10 text-error flex items-center justify-center mx-auto shadow-xs">
+                  <span className="material-symbols-outlined text-3xl">wifi_off</span>
+                </div>
+                <h3 className="text-title-md font-bold text-error">
+                  {language === 'ar' ? 'تعذر تحميل سجل المعاملات' : 'Unable to load transaction ledger'}
+                </h3>
+                <p className="text-body-sm text-on-surface-variant max-w-sm mx-auto">
+                  {language === 'ar'
+                    ? 'حدث خطأ في الاتصال بالخادم أثناء استرجاع المعاملات. يرجى التحقق من اتصال الشبكة وإعادة المحاولة.'
+                    : 'A network error occurred while retrieving transactions. Please check your connection and try again.'}
+                </p>
+                {onRetry && (
+                  <button
+                    onClick={onRetry}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-xl font-bold text-label-sm hover:bg-primary/90 cursor-pointer shadow-xs active:scale-95 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-base">refresh</span>
+                    <span>{language === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
+                  </button>
+                )}
               </div>
-              <h3 className="text-title-md font-bold text-on-surface">
-                {language === 'ar' ? 'لا توجد معاملات مطابقة للبحث' : 'No matching transactions'}
-              </h3>
-              <p className="text-body-sm text-on-surface-variant max-w-sm mx-auto">
-                {language === 'ar'
-                  ? 'ستظهر هنا كافة المعاملات المؤكدة وقيد المراجعة فور وصول الرسائل إلى أجهزتك المتصلة.'
-                  : 'Incoming payments will appear here in real-time as soon as SMS/notifications are captured.'}
-              </p>
-            </div>
+            ) : (
+              <div className="p-12 text-center bg-surface-container-lowest border border-outline-variant rounded-2xl space-y-4 shadow-xs">
+                <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-xs">
+                  <span className="material-symbols-outlined text-3xl">receipt_long</span>
+                </div>
+                <h3 className="text-title-md font-bold text-on-surface">
+                  {language === 'ar' ? 'لا توجد معاملات مطابقة للبحث' : 'No matching transactions'}
+                </h3>
+                <p className="text-body-sm text-on-surface-variant max-w-sm mx-auto">
+                  {language === 'ar'
+                    ? 'ستظهر هنا كافة المعاملات المؤكدة وقيد المراجعة فور وصول الرسائل إلى أجهزتك المتصلة.'
+                    : 'Incoming payments will appear here in real-time as soon as SMS/notifications are captured.'}
+                </p>
+              </div>
+            )
           ) : (
             filteredList.map((tx) => {
               const isSelected = activeDetailTx?.id === tx.id;

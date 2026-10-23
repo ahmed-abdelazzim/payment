@@ -15,7 +15,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, onC
   const [paymentSourceId, setPaymentSourceId] = useState('');
   const [adapterType, setAdapterType] = useState<'macrodroid' | 'apple_shortcuts' | 'huawei_emui'>('macrodroid');
   const [friendlyName, setFriendlyName] = useState('');
-  const [captureCredential, setCaptureCredential] = useState<{ token: string; endpoint: string } | null>(null);
+  const [captureCredential, setCaptureCredential] = useState<{ token: string; endpoint: string; accountId: string; userId: string; deviceId: string } | null>(null);
   const [rawContent, setRawContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +86,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, onC
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || result.error || 'Could not create the connection.');
-      setCaptureCredential({ token: result.token, endpoint: `${window.location.origin}${result.endpoint}` });
+      setCaptureCredential({ token: result.token, endpoint: `${window.location.origin}${result.endpoint}`, accountId: result.accountId, userId: result.userId, deviceId: result.deviceId });
       onCaptureSaved('device');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Connection error');
@@ -150,11 +150,16 @@ export const PairingModal: React.FC<PairingModalProps> = ({ isOpen, onClose, onC
               <button type="submit" disabled={loading || rails.length === 0} className="w-full rounded-lg bg-primary px-4 py-3 font-bold text-on-primary disabled:opacity-50">{loading ? (language === 'ar' ? 'جارٍ الإنشاء…' : 'Creating…') : (language === 'ar' ? 'إنشاء بيانات ربط الهاتف' : 'Create phone connection')}</button>
             </form>
             {captureCredential && <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
-              <p className="text-body-sm font-bold text-on-surface">{language === 'ar' ? 'احتفظ بالمفتاح الآن؛ لن يظهر بعد إغلاق هذه النافذة.' : 'Save this key now; it will not be shown after closing.'}</p>
+              <p className="text-body-sm font-bold text-on-surface">{language === 'ar' ? 'الرابط خاص بهذا الحساب والهاتف. احتفظ بالمفتاح الآن؛ لن يظهر بعد إغلاق هذه النافذة.' : 'This URL is specific to this account and phone. Save the key now; it will not be shown after closing.'}</p>
+              <div className="grid gap-2 text-label-xs text-on-surface-variant">
+                <div><span>{language === 'ar' ? 'معرّف الحساب: ' : 'Account ID: '}</span><code className="break-all select-all">{captureCredential.accountId}</code></div>
+                <div><span>{language === 'ar' ? 'معرّف المستخدم: ' : 'User ID: '}</span><code className="break-all select-all">{captureCredential.userId}</code></div>
+                <div><span>{language === 'ar' ? 'معرّف الهاتف: ' : 'Phone ID: '}</span><code className="break-all select-all">{captureCredential.deviceId}</code></div>
+              </div>
               <div><span className="text-label-xs block mb-1">POST URL</span><code className="block break-all text-body-sm select-all">{captureCredential.endpoint}</code><button type="button" onClick={() => copyText(captureCredential.endpoint)} className="text-primary underline text-label-sm">{language === 'ar' ? 'نسخ الرابط' : 'Copy URL'}</button></div>
               <div><span className="text-label-xs block mb-1">Authorization header</span><code className="block break-all text-body-sm select-all">Bearer {captureCredential.token}</code><button type="button" onClick={() => copyText(`Bearer ${captureCredential.token}`)} className="text-primary underline text-label-sm">{language === 'ar' ? 'نسخ قيمة الهيدر' : 'Copy header value'}</button></div>
-              <div><span className="text-label-xs block mb-1">Content-Type: application/json · Body</span><code className="block break-all text-body-sm select-all">{'{"raw_content":"<MESSAGE_BODY>"}'}</code></div>
-              <p className="text-body-sm text-on-surface-variant">{language === 'ar' ? 'ضع نص الرسالة الفعلي مكان <MESSAGE_BODY> من قائمة متغيرات أداة الأتمتة. لا تضع المفتاح في الرابط ولا ترسله لأحد.' : 'Insert the actual received message body from the automation variable picker. Keep the key out of the URL and do not share it.'}</p>
+              <div><span className="text-label-xs block mb-1">Content-Type: application/json · Body</span><code className="block break-all whitespace-pre-wrap text-body-sm select-all">{'{"sms_message":"{sms_message}","sms_number":"{sms_number}","battery":"{battery}","device_model":"{device_model}","power":"{power}"}'}</code><button type="button" onClick={() => copyText('{"sms_message":"{sms_message}","sms_number":"{sms_number}","battery":"{battery}","device_model":"{device_model}","power":"{power}"}')} className="text-primary underline text-label-sm">{language === 'ar' ? 'نسخ قالب البيانات' : 'Copy JSON template'}</button></div>
+              <p className="text-body-sm text-on-surface-variant">{language === 'ar' ? 'استبدل المتغيرات من أداة الأتمتة بالقيم الحقيقية للرسالة والهاتف. الرابط يحدد الحساب والهاتف، والمفتاح الخاص يؤكد أن الطلب صادر من إعداد هذا الهاتف. لا تضع المفتاح في الرابط ولا ترسله لأحد.' : 'Replace the placeholders with actual message and phone values from your automation tool. The URL identifies the account and phone; the private key authenticates this setup. Keep the key out of the URL and do not share it.'}</p>
               <p className="text-body-sm text-on-surface-variant">{adapterType === 'apple_shortcuts'
                 ? (language === 'ar' ? 'في Shortcuts: Automation ← Message ← اختر مرسل البنك أو المحفظة ← Get Contents of URL ← POST ← أضف الهيدرَين أعلاه وJSON body بنص الرسالة الواردة. جرّبها برسالة حقيقية على هاتفك؛ سلوك أتمتة الرسائل يختلف حسب إصدار iOS.' : 'In Shortcuts: Automation → Message → choose bank/wallet sender → Get Contents of URL → POST → add the headers and JSON body using the incoming message. Validate on the physical iPhone; message automation behavior varies by iOS version.')
                 : (language === 'ar' ? 'في MacroDroid: أنشئ Macro بـ Trigger: SMS Received أو Notification Received للتطبيق البنكي، ثم Action: HTTP Request POST. ضع الرابط والهيدرَين وJSON body أعلاه، واختر متغير نص الرسالة من MacroDroid. جرّب استقبال رسالة حقيقية.' : 'In MacroDroid: use SMS Received or bank-app Notification Received as trigger, then HTTP Request POST with the URL, headers and JSON body above. Insert the message-text variable from MacroDroid and test with a real message.')}</p>

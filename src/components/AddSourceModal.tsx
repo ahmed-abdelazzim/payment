@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { ProviderType, ProviderRail } from '../types';
 import { apiFetch } from '../api';
+import { getNextFocusIndex, validateDailyMonthlyLimits } from '../utils/uiHelpers';
+
+export const INITIAL_ADD_SOURCE_FORM_STATE = {
+  provider: 'vodafone_cash' as ProviderType,
+  friendlyName: '',
+  walletNumber: '',
+  dailyLimit: 60000,
+  monthlyLimit: 200000,
+  setAsDefault: true,
+  loading: false,
+  error: null as string | null,
+  walletTouched: false,
+};
 
 interface AddSourceModalProps {
   isOpen: boolean;
@@ -15,15 +28,15 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
   onSourceAdded,
   language,
 }) => {
-  const [provider, setProvider] = useState<ProviderType>('vodafone_cash');
-  const [friendlyName, setFriendlyName] = useState('');
-  const [walletNumber, setWalletNumber] = useState('');
-  const [dailyLimit, setDailyLimit] = useState<number>(60000);
-  const [monthlyLimit, setMonthlyLimit] = useState<number>(200000);
-  const [setAsDefault, setSetAsDefault] = useState<boolean>(true);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [walletTouched, setWalletTouched] = useState(false);
+  const [provider, setProvider] = useState<ProviderType>(INITIAL_ADD_SOURCE_FORM_STATE.provider);
+  const [friendlyName, setFriendlyName] = useState(INITIAL_ADD_SOURCE_FORM_STATE.friendlyName);
+  const [walletNumber, setWalletNumber] = useState(INITIAL_ADD_SOURCE_FORM_STATE.walletNumber);
+  const [dailyLimit, setDailyLimit] = useState<number>(INITIAL_ADD_SOURCE_FORM_STATE.dailyLimit);
+  const [monthlyLimit, setMonthlyLimit] = useState<number>(INITIAL_ADD_SOURCE_FORM_STATE.monthlyLimit);
+  const [setAsDefault, setSetAsDefault] = useState<boolean>(INITIAL_ADD_SOURCE_FORM_STATE.setAsDefault);
+  const [loading, setLoading] = useState<boolean>(INITIAL_ADD_SOURCE_FORM_STATE.loading);
+  const [error, setError] = useState<string | null>(INITIAL_ADD_SOURCE_FORM_STATE.error);
+  const [walletTouched, setWalletTouched] = useState(INITIAL_ADD_SOURCE_FORM_STATE.walletTouched);
 
   const toLatinDigits = (v: string) => v.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
   const normalizedWallet = toLatinDigits(walletNumber).replace(/[\s-]/g, '');
@@ -36,15 +49,74 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
       : language === 'ar' ? 'أدخل رقم موبايل مصري صحيح من 11 رقماً يبدأ بـ 010 أو 011 أو 012 أو 015.' : 'Enter a valid 11-digit Egyptian mobile number starting with 010, 011, 012 or 015.'
     : null;
 
-  // ESC key to close
+  const modalRef = React.useRef<HTMLDivElement>(null);
+
+  const resetForm = () => {
+    setProvider(INITIAL_ADD_SOURCE_FORM_STATE.provider);
+    setFriendlyName(INITIAL_ADD_SOURCE_FORM_STATE.friendlyName);
+    setWalletNumber(INITIAL_ADD_SOURCE_FORM_STATE.walletNumber);
+    setDailyLimit(INITIAL_ADD_SOURCE_FORM_STATE.dailyLimit);
+    setMonthlyLimit(INITIAL_ADD_SOURCE_FORM_STATE.monthlyLimit);
+    setSetAsDefault(INITIAL_ADD_SOURCE_FORM_STATE.setAsDefault);
+    setLoading(INITIAL_ADD_SOURCE_FORM_STATE.loading);
+    setError(INITIAL_ADD_SOURCE_FORM_STATE.error);
+    setWalletTouched(INITIAL_ADD_SOURCE_FORM_STATE.walletTouched);
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      resetForm();
+    }
+  }, [isOpen]);
+
+  // Focus trap & keyboard accessibility (BUG-010)
   useEffect(() => {
     if (!isOpen) return;
+    const modal = modalRef.current;
+    if (!modal) return;
+
+    const focusable = modal.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable.length > 0) {
+      focusable[0].focus();
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        handleClose();
+        return;
+      }
+      if (e.key === 'Tab') {
+        const focusableElements = Array.from(
+          modal.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((el) => !el.hasAttribute('disabled'));
+
+        if (focusableElements.length === 0) return;
+
+        const currentIndex = focusableElements.indexOf(document.activeElement as HTMLElement);
+        if (currentIndex === 0 && e.shiftKey) {
+          const nextIndex = getNextFocusIndex(currentIndex, focusableElements.length, true);
+          focusableElements[nextIndex]?.focus();
+          e.preventDefault();
+        } else if (currentIndex === focusableElements.length - 1 && !e.shiftKey) {
+          const nextIndex = getNextFocusIndex(currentIndex, focusableElements.length, false);
+          focusableElements[nextIndex]?.focus();
+          e.preventDefault();
+        }
+      }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -58,6 +130,16 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
     e.preventDefault();
     setWalletTouched(true);
     if (!walletValid) return;
+
+    if (!validateDailyMonthlyLimits(Number(dailyLimit), Number(monthlyLimit))) {
+      setError(
+        language === 'ar'
+          ? 'الحد اليومي لا يمكن أن يتجاوز الحد الشهري'
+          : 'Daily limit cannot exceed monthly limit'
+      );
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -104,7 +186,7 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
         isPaused: false,
       });
 
-      onClose();
+      handleClose();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -114,17 +196,24 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in-95">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-source-modal-title"
+        className="bg-surface-container-lowest border border-outline-variant rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in-95"
+      >
         <div className="flex items-center justify-between pb-3 border-b border-outline-variant">
           <div className="flex items-center gap-2 text-primary">
             <span className="material-symbols-outlined text-2xl">account_balance_wallet</span>
-            <h3 className="text-title-md font-bold text-on-surface">
+            <h3 id="add-source-modal-title" className="text-title-md font-bold text-on-surface">
               {language === 'ar' ? 'إضافة مسار استقبال / محفظة جديدة' : 'Add Receiving Payment Source'}
             </h3>
           </div>
           <button
-            onClick={onClose}
-            className="p-1 rounded text-on-surface-variant hover:bg-surface-container"
+            onClick={handleClose}
+            className="p-1 rounded text-on-surface-variant hover:bg-surface-container cursor-pointer"
+            aria-label={language === 'ar' ? 'إغلاق' : 'Close'}
           >
             <span className="material-symbols-outlined text-xl">close</span>
           </button>
@@ -262,8 +351,8 @@ export const AddSourceModal: React.FC<AddSourceModalProps> = ({
           <div className="flex items-center justify-end gap-2 pt-3">
             <button
               type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg text-label-md font-semibold text-on-surface-variant hover:bg-surface-container"
+              onClick={handleClose}
+              className="px-4 py-2 rounded-lg text-label-md font-semibold text-on-surface-variant hover:bg-surface-container cursor-pointer"
             >
               {language === 'ar' ? 'إلغاء' : 'Cancel'}
             </button>

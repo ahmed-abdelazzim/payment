@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Workspace, ProviderRail, Device } from '../types';
+import { isLimitsStepCompleted } from '../utils/uiHelpers';
 
 interface OnboardingGuideModalProps {
   isOpen: boolean;
@@ -48,7 +49,7 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
   const hasVerifiedPermissions = devices.some(
     (d) => d.status === 'online' && Boolean(d.verifiedAt) && Boolean(d.notificationListenerGranted)
   );
-  const hasLimitsConfigured = rails.some((r) => r.dailyLimit > 0);
+  const hasLimitsConfigured = isLimitsStepCompleted(workspace);
   const hasRealPayment = transactionsCount > 0;
 
   const handleNavigate = (tab: string) => {

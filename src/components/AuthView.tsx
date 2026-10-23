@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, Workspace } from '../types';
 import { apiFetch } from '../api';
+import { formatAuthErrorMessage, getPasswordInputType } from '../utils/uiHelpers';
 
 interface AuthViewProps {
   onSuccess: (user: User, org: Workspace) => void;
@@ -29,6 +30,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   // Signup form state
   const [signupFullName, setSignupFullName] = useState('');
@@ -36,6 +38,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [signupOrgNameAr, setSignupOrgNameAr] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
 
   // Forgot password form state
   const [forgotEmail, setForgotEmail] = useState('');
@@ -82,7 +85,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         }
       );
     } catch (err: any) {
-      setError(err.message);
+      setError(formatAuthErrorMessage(err, language, typeof navigator !== 'undefined' ? navigator.onLine : true));
     } finally {
       setLoading(false);
     }
@@ -129,7 +132,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
         }
       );
     } catch (err: any) {
-      setError(err.message);
+      setError(formatAuthErrorMessage(err, language, typeof navigator !== 'undefined' ? navigator.onLine : true));
     } finally {
       setLoading(false);
     }
@@ -412,14 +415,26 @@ export const AuthView: React.FC<AuthViewProps> = ({
                     {language === 'ar' ? 'نسيت كلمة المرور؟' : 'Forgot password?'}
                   </button>
                 </div>
-                <input
-                  type="password"
-                  required
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                />
+                <div className="relative">
+                  <input
+                    type={getPasswordInputType(showLoginPassword)}
+                    required
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3.5 py-2.5 pe-11 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword((prev) => !prev)}
+                    className="absolute end-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface p-1 rounded-md transition-colors cursor-pointer"
+                    aria-label={showLoginPassword ? (language === 'ar' ? 'إخفاء كلمة المرور' : 'Hide password') : (language === 'ar' ? 'إظهار كلمة المرور' : 'Show password')}
+                  >
+                    <span className="material-symbols-outlined text-lg">
+                      {showLoginPassword ? 'visibility_off' : 'visibility'}
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <button
@@ -514,15 +529,27 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 <label className="block text-label-md text-on-surface font-medium mb-1.5">
                   {language === 'ar' ? 'كلمة المرور' : 'Password (min. 8 characters)'}
                 </label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  value={signupPassword}
-                  onChange={(e) => setSignupPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                />
+                <div className="relative">
+                  <input
+                    type={getPasswordInputType(showSignupPassword)}
+                    required
+                    minLength={8}
+                    value={signupPassword}
+                    onChange={(e) => setSignupPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3.5 py-2.5 pe-11 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSignupPassword((prev) => !prev)}
+                    className="absolute end-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface p-1 rounded-md transition-colors cursor-pointer"
+                    aria-label={showSignupPassword ? (language === 'ar' ? 'إخفاء كلمة المرور' : 'Hide password') : (language === 'ar' ? 'إظهار كلمة المرور' : 'Show password')}
+                  >
+                    <span className="material-symbols-outlined text-lg">
+                      {showSignupPassword ? 'visibility_off' : 'visibility'}
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <div className="p-3 rounded-lg bg-surface-container-low border border-outline-variant/60 text-label-sm text-on-surface-variant flex items-center gap-2">

@@ -32,6 +32,8 @@ export interface Transaction {
 
 export interface Device {
   id: string;
+  accountId?: string;
+  createdByUserId?: string;
   deviceNumber: string;
   name: string;
   location: string;
@@ -47,6 +49,10 @@ export interface Device {
   agentVersion: string;
   configVersion: string;
   adapterType?: string;
+  batteryReported?: boolean;
+  deviceModel?: string;
+  powerState?: string;
+  smsSender?: string;
   verifiedAt?: string;
   notificationListenerGranted?: boolean;
   batteryOptimizationExempt?: boolean;

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { computeScrollTargetOffset } from '../utils/uiHelpers';
 
 interface LandingPageViewProps {
   language: 'en' | 'ar';
@@ -26,7 +27,13 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth' });
+      const navHeader = document.querySelector('header');
+      const headerHeight = navHeader ? navHeader.getBoundingClientRect().height : 64;
+      const elementPosition = el.getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({
+        top: computeScrollTargetOffset(elementPosition, headerHeight, 16),
+        behavior: 'smooth',
+      });
     }
   };
 
@@ -328,7 +335,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </section>
 
       {/* 3. Problem Section */}
-      <section id="problem" className="py-16 sm:py-24 border-b border-outline-variant/60">
+      <section id="problem" className="py-16 sm:py-24 border-b border-outline-variant/60 scroll-mt-24">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="max-w-3xl mx-auto text-center mb-12">
             <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">
@@ -391,7 +398,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </section>
 
       {/* 4. Features Section */}
-      <section id="features" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-surface-container-low/30">
+      <section id="features" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-surface-container-low/30 scroll-mt-24">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="max-w-3xl mx-auto text-center mb-14">
             <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">
@@ -547,7 +554,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </section>
 
       {/* 4.5 Payment Gateway & E-Commerce Integration Section */}
-      <section id="gateways" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-gradient-to-b from-surface-container-low/30 to-surface-container-lowest">
+      <section id="gateways" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-gradient-to-b from-surface-container-low/30 to-surface-container-lowest scroll-mt-24">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="max-w-3xl mx-auto text-center mb-14">
             <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">
@@ -622,7 +629,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </section>
 
       {/* 5. How it Works Section */}
-      <section id="how-it-works" className="py-16 sm:py-24 border-b border-outline-variant/60">
+      <section id="how-it-works" className="py-16 sm:py-24 border-b border-outline-variant/60 scroll-mt-24">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="max-w-3xl mx-auto text-center mb-14">
             <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">
@@ -721,7 +728,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </section>
 
       {/* 6. Pricing & Plans Section */}
-      <section id="pricing" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-surface-container-low/30">
+      <section id="pricing" className="py-16 sm:py-24 border-b border-outline-variant/60 bg-surface-container-low/30 scroll-mt-24">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="max-w-3xl mx-auto text-center mb-14">
             <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">
@@ -904,7 +911,7 @@ export const LandingPageView: React.FC<LandingPageViewProps> = ({
       </section>
 
       {/* 7. FAQ Section */}
-      <section id="faq" className="py-16 sm:py-24 border-b border-outline-variant/60">
+      <section id="faq" className="py-16 sm:py-24 border-b border-outline-variant/60 scroll-mt-24">
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
           <div className="text-center mb-12">
             <span className="text-label-sm font-bold text-primary uppercase tracking-wider block mb-2">

@@ -7,6 +7,8 @@ interface RailsViewProps {
   onTogglePause?: (railId: string) => void | Promise<void>;
   onOpenAddSource?: () => void;
   language: 'en' | 'ar';
+  isError?: boolean;
+  onRetry?: () => void;
 }
 
 export const RailsView: React.FC<RailsViewProps> = ({
@@ -15,6 +17,8 @@ export const RailsView: React.FC<RailsViewProps> = ({
   onTogglePause,
   onOpenAddSource,
   language,
+  isError,
+  onRetry,
 }) => {
   const [activeTab, setActiveTab] = useState<'limits' | 'sources'>('limits');
   const [selectedRail, setSelectedRail] = useState<ProviderRail | null>(null);
@@ -111,28 +115,53 @@ export const RailsView: React.FC<RailsViewProps> = ({
       {/* Rails Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {rails.length === 0 ? (
-          <div className="col-span-full p-12 text-center bg-surface-container-lowest border border-outline-variant rounded-2xl space-y-4 shadow-xs">
-            <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-xs">
-              <span className="material-symbols-outlined text-3xl">account_balance_wallet</span>
+          isError ? (
+            <div className="col-span-full p-12 text-center bg-error-container/10 border border-error/30 rounded-2xl space-y-4 shadow-xs">
+              <div className="w-14 h-14 rounded-2xl bg-error/10 text-error flex items-center justify-center mx-auto shadow-xs">
+                <span className="material-symbols-outlined text-3xl">wifi_off</span>
+              </div>
+              <h3 className="text-title-md font-bold text-error">
+                {language === 'ar' ? 'تعذر تحميل مسارات الاستقبال' : 'Unable to load receiving rails'}
+              </h3>
+              <p className="text-body-sm text-on-surface-variant max-w-md mx-auto">
+                {language === 'ar'
+                  ? 'حدث خطأ في الاتصال بالخادم أثناء استرجاع بيانات المحافظ والحدود. يرجى التحقق من اتصال الشبكة وإعادة المحاولة.'
+                  : 'A network error occurred while retrieving wallet capacity data. Please check your connection and try again.'}
+              </p>
+              {onRetry && (
+                <button
+                  onClick={onRetry}
+                  className="px-5 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold inline-flex items-center gap-2 shadow-xs active:scale-95 transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-lg">refresh</span>
+                  <span>{language === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
+                </button>
+              )}
             </div>
-            <h3 className="text-title-md font-bold text-on-surface">
-              {language === 'ar' ? 'لم يتم إضافة مسارات استقبال بعد' : 'No receiving sources configured'}
-            </h3>
-            <p className="text-body-sm text-on-surface-variant max-w-md mx-auto">
-              {language === 'ar'
-                ? 'أضف محفظة فودافون كاش، إنستاباي IPA، أو محفظة أورنچ/إي آند للبدء بمراقبة الاستقبال والسعة.'
-                : 'Add your Vodafone Cash, InstaPay VPA, Orange Cash, or e& Cash receiving wallet.'}
-            </p>
-            {onOpenAddSource && (
-              <button
-                onClick={onOpenAddSource}
-                className="px-5 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold inline-flex items-center gap-2 shadow-xs active:scale-95 transition-all cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-lg">add_circle</span>
-                <span>{language === 'ar' ? 'إضافة أول مسار استقبال' : 'Add First Source'}</span>
-              </button>
-            )}
-          </div>
+          ) : (
+            <div className="col-span-full p-12 text-center bg-surface-container-lowest border border-outline-variant rounded-2xl space-y-4 shadow-xs">
+              <div className="w-14 h-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mx-auto shadow-xs">
+                <span className="material-symbols-outlined text-3xl">account_balance_wallet</span>
+              </div>
+              <h3 className="text-title-md font-bold text-on-surface">
+                {language === 'ar' ? 'لم يتم إضافة مسارات استقبال بعد' : 'No receiving sources configured'}
+              </h3>
+              <p className="text-body-sm text-on-surface-variant max-w-md mx-auto">
+                {language === 'ar'
+                  ? 'أضف محفظة فودافون كاش، إنستاباي IPA، أو محفظة أورنچ/إي آند للبدء بمراقبة الاستقبال والسعة.'
+                  : 'Add your Vodafone Cash, InstaPay VPA, Orange Cash, or e& Cash receiving wallet.'}
+              </p>
+              {onOpenAddSource && (
+                <button
+                  onClick={onOpenAddSource}
+                  className="px-5 py-2.5 bg-primary text-on-primary rounded-xl text-label-md font-bold inline-flex items-center gap-2 shadow-xs active:scale-95 transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-lg">add_circle</span>
+                  <span>{language === 'ar' ? 'إضافة أول مسار استقبال' : 'Add First Source'}</span>
+                </button>
+              )}
+            </div>
+          )
         ) : (
           rails.map((rail) => {
             const hasDailyUsage = typeof rail.dailyIntake === 'number';

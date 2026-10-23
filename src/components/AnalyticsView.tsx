@@ -1571,12 +1571,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
                 <span>{language === 'ar' ? 'رابط التوجيه المعتمد (Authorized Redirect URI):' : 'Authorized Redirect URI:'}</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    const uri = `${window.location.origin}/api/v1/integrations/google/callback`;
-                    navigator.clipboard.writeText(uri);
-                    setCopiedRedirectUri(true);
-                    showToast(language === 'ar' ? 'تم نسخ الرابط' : 'Redirect URI copied');
-                    setTimeout(() => setCopiedRedirectUri(false), 2000);
+                  onClick={async () => {
+                    try {
+                      const uri = `${window.location.origin}/api/v1/integrations/google/callback`;
+                      await navigator.clipboard.writeText(uri);
+                      setCopiedRedirectUri(true);
+                      showToast(language === 'ar' ? 'تم نسخ الرابط' : 'Redirect URI copied');
+                      setTimeout(() => setCopiedRedirectUri(false), 2000);
+                    } catch {
+                      showToast(language === 'ar' ? 'تعذر النسخ التلقائي، يرجى نسخ الرابط يدوياً' : 'Failed to copy automatically');
+                    }
                   }}
                   className="text-primary hover:underline font-bold flex items-center gap-1 cursor-pointer"
                 >
@@ -1670,11 +1674,15 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               </pre>
 
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(googleAppsScriptCode);
-                  setCopiedScript(true);
-                  showToast(language === 'ar' ? 'تم نسخ كود السكريبت إلى الحافظة' : 'Script copied to clipboard');
-                  setTimeout(() => setCopiedScript(false), 2000);
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(googleAppsScriptCode);
+                    setCopiedScript(true);
+                    showToast(language === 'ar' ? 'تم نسخ كود السكريبت إلى الحافظة' : 'Script copied to clipboard');
+                    setTimeout(() => setCopiedScript(false), 2000);
+                  } catch {
+                    showToast(language === 'ar' ? 'تعذر النسخ التلقائي، يرجى نسخ الكود يدوياً' : 'Failed to copy automatically');
+                  }
                 }}
                 className="absolute top-2 right-2 rtl:right-auto rtl:left-2 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1 shadow-sm active:scale-95 transition-all cursor-pointer"
               >

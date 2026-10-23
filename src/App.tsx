@@ -26,6 +26,8 @@ import { AuthView } from './components/AuthView';
 import { ViewLoadingSkeleton } from './components/ViewLoadingSkeleton';
 import { apiFetch } from './api';
 
+import { syncTabToUrl } from './utils/uiHelpers';
+
 // Code-split heavy or secondary views to reduce the initial JS bundle size
 const LandingPageView = React.lazy(() =>
   import('./components/LandingPageView').then((m) => ({ default: m.LandingPageView }))
@@ -143,9 +145,20 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       setCurrentPath(window.location.pathname || '/');
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      setCurrentTab(tabParam || 'dashboard');
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleSelectTab = useCallback((tab: string) => {
+    setCurrentTab(tab);
+    if (typeof window !== 'undefined') {
+      const newUrl = syncTabToUrl(window.location.href, tab);
+      window.history.pushState({ tab }, '', newUrl);
+    }
   }, []);
 
   const navigate = useCallback((path: string) => {
@@ -173,6 +186,8 @@ export default function App() {
     currentSub,
     refreshBackendData,
     clearTelemetry,
+    isError,
+    fetchError,
   } = useTelemetry({
     enabled: Boolean(hasSession && currentUser && workspace),
     onDeviceListFetched: (fetchedDevices) => {
@@ -465,8 +480,8 @@ export default function App() {
         onToggleLanguage={handleToggleLanguage}
         onToggleDrawer={() => setIsDrawerOpen(true)}
         onOpenOnboarding={() => setIsOnboardingOpen(true)}
-        onOpenSubscriptions={() => setCurrentTab('subscriptions')}
-        onOpenIntegrations={() => setCurrentTab('integrations')}
+        onOpenSubscriptions={() => handleSelectTab('subscriptions')}
+        onOpenIntegrations={() => handleSelectTab('integrations')}
         onNavigateHome={() => navigate('/')}
         currentTab={currentTab}
         theme={theme}
@@ -491,7 +506,7 @@ export default function App() {
               </div>
             </div>
             <button
-              onClick={() => setCurrentTab('subscriptions')}
+              onClick={() => handleSelectTab('subscriptions')}
               className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shrink-0 cursor-pointer shadow-xs active:scale-95 transition-all"
             >
               {language === 'ar' ? 'اختار باقتك' : 'Choose Plan'}
@@ -513,7 +528,7 @@ export default function App() {
               </div>
             </div>
             <button
-              onClick={() => setCurrentTab('subscriptions')}
+              onClick={() => handleSelectTab('subscriptions')}
               className="px-3 py-1 rounded-lg bg-primary text-on-primary hover:bg-primary/90 font-bold text-xs shrink-0 cursor-pointer shadow-xs active:scale-95 transition-all"
             >
               {language === 'ar' ? 'شوف الباقات' : 'View Plans'}
@@ -540,13 +555,13 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
             <button
-              onClick={() => setCurrentTab('subscriptions')}
+              onClick={() => handleSelectTab('subscriptions')}
               className="px-3 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-container text-on-surface font-semibold text-xs border border-outline-variant cursor-pointer transition-all"
             >
               {language === 'ar' ? 'قارن الباقات' : 'Compare Plans'}
             </button>
             <button
-              onClick={() => setCurrentTab('subscriptions')}
+              onClick={() => handleSelectTab('subscriptions')}
               className="px-4 py-1.5 rounded-lg bg-primary text-on-primary hover:bg-primary/90 font-bold text-xs cursor-pointer shadow-xs active:scale-95 transition-all"
             >
               {language === 'ar' ? 'اشترك الآن' : 'Subscribe Now'}
@@ -605,11 +620,11 @@ export default function App() {
             rails={rails}
             onSelectTransaction={(tx) => {
               setSelectedTransaction(tx);
-              setCurrentTab('ledger');
+              handleSelectTab('ledger');
             }}
             onOpenReview={(tx) => setReviewingTransaction(tx)}
-            onInspectDevice={(_dev) => setCurrentTab('devices')}
-            onOpenLedger={() => setCurrentTab('ledger')}
+            onInspectDevice={(_dev) => handleSelectTab('devices')}
+            onOpenLedger={() => handleSelectTab('ledger')}
             language={language}
           />
         )}
@@ -622,6 +637,8 @@ export default function App() {
             onOpenReview={(tx) => setReviewingTransaction(tx)}
             onConfirmTransaction={(tx) => handleApproveTransaction(tx)}
             language={language}
+            isError={isError}
+            onRetry={refreshBackendData}
           />
         )}
 
@@ -654,6 +671,8 @@ export default function App() {
             onTogglePause={handleToggleRailPause}
             onOpenAddSource={() => setIsAddSourceOpen(true)}
             language={language}
+            isError={isError}
+            onRetry={refreshBackendData}
           />
         )}
 
@@ -676,7 +695,7 @@ export default function App() {
               onUpdateWorkspace={(updated) => {
                 setWorkspace((prev) => (prev ? { ...prev, ...updated } : null));
               }}
-              onNavigateToSubscriptions={() => setCurrentTab('subscriptions')}
+              onNavigateToSubscriptions={() => handleSelectTab('subscriptions')}
               language={language}
               theme={theme}
               onToggleTheme={handleToggleTheme}
@@ -686,7 +705,7 @@ export default function App() {
           {currentTab === 'subscriptions' && (
             <SubscriptionsView
               language={language}
-              onNavigateToTab={(tab) => setCurrentTab(tab)}
+              onNavigateToTab={(tab) => handleSelectTab(tab)}
               showToast={showToast}
             />
           )}
@@ -709,7 +728,7 @@ export default function App() {
         devicesOnlineCount={devicesOnlineCount}
         totalDevicesCount={devices.length}
         currentTab={currentTab}
-        onSelectTab={(tab) => setCurrentTab(tab)}
+        onSelectTab={(tab) => handleSelectTab(tab)}
         onOpenOnboarding={() => setIsOnboardingOpen(true)}
         onSwitchWorkspace={handleSwitchWorkspace}
         onLogout={handleLogout}
@@ -721,7 +740,7 @@ export default function App() {
       {/* Bottom Navigation Bar */}
       <BottomNavBar
         currentTab={currentTab}
-        onSelectTab={(tab) => setCurrentTab(tab)}
+        onSelectTab={(tab) => handleSelectTab(tab)}
         hasOfflineDevices={hasOfflineDevices}
         language={language}
       />
@@ -747,8 +766,8 @@ export default function App() {
         transactionsCount={transactions.length}
         onOpenAddSource={() => setIsAddSourceOpen(true)}
         onOpenPairDevice={() => setIsPairingOpen(true)}
-        onOpenSettings={() => setCurrentTab('settings')}
-        onNavigateTab={(tab) => setCurrentTab(tab)}
+        onOpenSettings={() => handleSelectTab('settings')}
+        onNavigateTab={(tab) => handleSelectTab(tab)}
         language={language}
       />
 

@@ -81,11 +81,15 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({
     loadSubscriptionData();
   }, []);
 
-  const handleCopyNumber = (num: string) => {
-    navigator.clipboard.writeText(num);
-    setCopiedNumber(true);
-    showToast(language === 'ar' ? 'تم نسخ رقم إنستاباي إلى الحافظة' : 'InstaPay number copied to clipboard');
-    setTimeout(() => setCopiedNumber(false), 3000);
+  const handleCopyNumber = async (num: string) => {
+    try {
+      await navigator.clipboard.writeText(num);
+      setCopiedNumber(true);
+      showToast(language === 'ar' ? 'تم نسخ رقم إنستاباي إلى الحافظة' : 'InstaPay number copied to clipboard');
+      setTimeout(() => setCopiedNumber(false), 3000);
+    } catch {
+      showToast(language === 'ar' ? 'تعذر النسخ التلقائي، يرجى نسخ الرقم يدوياً' : 'Failed to copy automatically. Please copy manually.');
+    }
   };
 
   // 1. Create a new subscription order

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Transaction, Device, ProviderRail, CurrentSubscription } from '../types';
 import { apiFetch } from '../api';
+import { resolveTelemetryStateOnFetch } from '../utils/uiHelpers';
 
 interface UseTelemetryOptions {
   enabled: boolean;
@@ -14,6 +15,8 @@ export function useTelemetry({ enabled, pollIntervalMs = 3000, onDeviceListFetch
   const [rails, setRails] = useState<ProviderRail[]>([]);
   const [currentSub, setCurrentSub] = useState<CurrentSubscription | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
 
   const onDeviceListFetchedRef = useRef(onDeviceListFetched);
   onDeviceListFetchedRef.current = onDeviceListFetched;
@@ -27,6 +30,11 @@ export function useTelemetry({ enabled, pollIntervalMs = 3000, onDeviceListFetch
         apiFetch('/api/v1/sources'),
         apiFetch('/api/v1/subscriptions/current'),
       ]);
+
+      const isSuccess = Boolean(txRes.ok && devRes.ok && railRes.ok);
+      const telemetryStatus = resolveTelemetryStateOnFetch(isSuccess, transactions);
+      setIsError(telemetryStatus.isError);
+      setFetchError(telemetryStatus.fetchError);
 
       if (subRes.ok) {
         const subData = await subRes.json();
@@ -70,8 +78,13 @@ export function useTelemetry({ enabled, pollIntervalMs = 3000, onDeviceListFetch
         );
 
         const mappedDevices: Device[] = Array.isArray(devData)
-          ? devData.map((d: any) => ({
+          ? devData.map((d: any) => {
+            let reported: Record<string, unknown> = {};
+            try { reported = d.last_telemetry_payload ? JSON.parse(d.last_telemetry_payload) : {}; } catch {}
+            return ({
               id: d.id,
+              accountId: d.account_id,
+              createdByUserId: d.created_by_user_id,
               deviceNumber: d.device_number,
               name: d.friendly_name,
               location: d.location || 'Terminal',
@@ -86,10 +99,15 @@ export function useTelemetry({ enabled, pollIntervalMs = 3000, onDeviceListFetch
               agentVersion: d.agent_version || '—',
               configVersion: d.config_version || '—',
               adapterType: d.adapter_type,
+              batteryReported: typeof reported.battery === 'number',
+              deviceModel: typeof reported.device_model === 'string' ? reported.device_model : undefined,
+              powerState: typeof reported.power === 'string' ? reported.power : undefined,
+              smsSender: typeof reported.sms_number === 'string' ? reported.sms_number : undefined,
               verifiedAt: d.verified_at,
               notificationListenerGranted: Boolean(d.notification_listener_granted),
               batteryOptimizationExempt: Boolean(d.battery_optimization_exempt),
-            }))
+            });
+          })
           : [];
 
         setDevices(mappedDevices);
@@ -120,8 +138,10 @@ export function useTelemetry({ enabled, pollIntervalMs = 3000, onDeviceListFetch
             : []
         );
       }
-    } catch {
+    } catch (err: any) {
       // Offline / network glitch
+      setIsError(true);
+      setFetchError(err?.message || 'NETWORK_ERROR');
     } finally {
       setIsRefreshing(false);
     }
@@ -161,6 +181,8 @@ export function useTelemetry({ enabled, pollIntervalMs = 3000, onDeviceListFetch
     currentSub,
     setCurrentSub,
     isRefreshing,
+    isError,
+    fetchError,
     refreshBackendData,
     clearTelemetry,
   };

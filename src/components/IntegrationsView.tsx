@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Workspace, User } from '../types';
 import { apiFetch } from '../api';
+import { copyToClipboardSafely } from '../utils/uiHelpers';
 
 interface IntegrationsViewProps {
   workspace: Workspace;
@@ -186,11 +187,12 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({
     }
   }, [subTab, loadPaymentLinks, loadWebhookLogs, loadWalletPool, loadBlocklist]);
 
-  const copyText = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(label);
-    showToast(language === 'ar' ? `تم نسخ ${label} بنجاح!` : `${label} copied to clipboard!`);
-    setTimeout(() => setCopiedKey(null), 2500);
+  const copyText = async (text: string, label: string) => {
+    const success = await copyToClipboardSafely(text, label, language, showToast);
+    if (success) {
+      setCopiedKey(label);
+      setTimeout(() => setCopiedKey(null), 2500);
+    }
   };
 
   const handleSaveWebhook = async (e: React.FormEvent) => {
