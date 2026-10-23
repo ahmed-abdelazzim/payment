@@ -1,7 +1,11 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Router, Request, Response } from 'express';
 import crypto from 'node:crypto';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { getDatabase } from './db';
 import { toMinor, fromMinor } from './money';
 import { verifyDeviceSignature, AuthenticatedDeviceRequest } from './middleware/deviceAuth';
@@ -42,7 +46,7 @@ apiRouter.use((req, res, next) => {
   }
 
   // Exempt device telemetry & ingestion
-  if (req.path === '/devices/ingest' || req.path === '/capture-links/ingest' || /^\/devices\/[^/]+\/telemetry$/.test(req.path)) {
+  if (req.path === '/devices/ingest' || req.path === '/capture-links/ingest' || /^\/capture-links\/[^/]+\/[^/]+\/ingest$/.test(req.path) || /^\/devices\/[^/]+\/telemetry$/.test(req.path)) {
     next();
     return;
   }
@@ -134,8 +138,8 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
   }
 
   const db = getDatabase();
-  const userId = `usr_${Date.now()}`;
-  const orgId = `org_${Date.now()}`;
+  const userId = `usr_${crypto.randomUUID()}`;
+  const orgId = `org_${crypto.randomUUID()}`;
   const normalizedEmail = email.toLowerCase().trim();
   const slug = organizationName.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + Math.floor(Math.random() * 1000);
 
@@ -165,7 +169,7 @@ apiRouter.post('/auth/signup', (req: Request, res: Response) => {
     db.prepare(`
       INSERT INTO organization_members (id, organization_id, user_id, role)
       VALUES (?, ?, ?, 'owner')
-    `).run(`mem_${Date.now()}`, orgId, userId);
+    `).run(`mem_${crypto.randomUUID()}`, orgId, userId);
 
     // 4. Create Clean Initial Balance Account (Zero Balance)
     db.prepare(`
@@ -760,7 +764,7 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
     let userId = user?.id;
 
     if (!user) {
-      userId = `usr_${Date.now()}`;
+      userId = `usr_${crypto.randomUUID()}`;
       const scryptHash = hashPassword(password);
       db.prepare(`
         INSERT INTO users (id, email, password_hash, full_name, email_verified, is_active)
@@ -772,7 +776,7 @@ apiRouter.post('/organizations/members/invitations/register-and-accept', (req: R
       INSERT INTO organization_members (id, organization_id, user_id, role)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(organization_id, user_id) DO UPDATE SET role = excluded.role
-    `).run(`mem_${Date.now()}`, invite.organization_id, userId, invite.role);
+    `).run(`mem_${crypto.randomUUID()}`, invite.organization_id, userId, invite.role);
 
     db.prepare(`UPDATE team_invitations SET accepted_at = datetime('now') WHERE token = ?`).run(hashOpaqueToken(token));
 
@@ -838,6 +842,24 @@ apiRouter.get('/organizations/settings', requireAuth, (req: AuthenticatedUserReq
 // Update Organization Settings (Telegram, Webhooks, Timezone)
 apiRouter.post('/organizations/settings', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const { name, nameAr, defaultTimezone, telegramBotToken, telegramChatId, webhookUrl, webhookSecret } = req.body;
+
+  // SET-003: Rejection of empty or whitespace-only organization name
+  if (name !== undefined) {
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      res.status(400).json({ error: 'INVALID_ORGANIZATION_NAME', message: 'Organization name cannot be empty or whitespace only' });
+      return;
+    }
+  }
+
+  // SET-005 / SEC: Rejection of invalid webhook URL protocol schemes
+  if (webhookUrl !== undefined && typeof webhookUrl === 'string' && webhookUrl.trim().length > 0) {
+    const trimmed = webhookUrl.trim();
+    if (!trimmed.startsWith('https://') && !trimmed.startsWith('http://')) {
+      res.status(400).json({ error: 'INVALID_WEBHOOK_URL', message: 'Webhook URL must start with http:// or https://' });
+      return;
+    }
+  }
+
   const db = getDatabase();
   const replacementTelegramToken = typeof telegramBotToken === 'string' && telegramBotToken.trim()
     ? telegramBotToken.trim()
@@ -863,6 +885,7 @@ apiRouter.post('/organizations/settings', requireAuth, requireRole(['owner', 'ad
     defaultTimezone || null,
     replacementTelegramToken,
     telegramChatId !== undefined ? telegramChatId : null,
+    typeof webhookUrl === 'string' ? webhookUrl.trim() : null,
     replacementWebhookSecret,
     req.user!.organizationId
   );
@@ -873,7 +896,7 @@ apiRouter.post('/organizations/settings', requireAuth, requireRole(['owner', 'ad
     if (trimmedUrl) {
       const existingEp = db.prepare('SELECT id FROM webhook_endpoints WHERE organization_id = ? LIMIT 1').get(req.user!.organizationId) as any;
       if (existingEp) {
-        db.prepare('UPDATE webhook_endpoints SET url = ?, signing_secret = COALESCE(?, signing_secret), is_active = 1, updated_at = datetime("now") WHERE id = ?')
+        db.prepare('UPDATE webhook_endpoints SET url = ?, signing_secret = COALESCE(?, signing_secret), is_active = 1 WHERE id = ?')
           .run(trimmedUrl, replacementWebhookSecret, existingEp.id);
       } else {
         db.prepare('INSERT INTO webhook_endpoints (id, organization_id, url, signing_secret, subscribed_events, is_active) VALUES (?, ?, ?, ?, ?, 1)')
@@ -996,6 +1019,29 @@ apiRouter.post('/sources', requireAuth, requireRole(['owner', 'admin']), (req: A
   }
   const resolvedDailyLimit = fromMinor(resolvedDailyMinor);
   const resolvedMonthlyLimit = fromMinor(resolvedMonthlyMinor);
+
+  if (resolvedDailyMinor > resolvedMonthlyMinor) {
+    res.status(400).json({
+      error: 'INVALID_SOURCE_LIMITS',
+      message: 'الحد اليومي لا يمكن أن يتجاوز الحد الشهري (Daily limit cannot exceed monthly limit).',
+    });
+    return;
+  }
+
+  // Reject duplicate active sources with the same address in the same workspace (BUG-005)
+  const duplicateSource = db.prepare(`
+    SELECT id FROM payment_sources
+    WHERE organization_id = ? AND wallet_number = ? AND retired_at IS NULL
+    LIMIT 1
+  `).get(req.user!.organizationId, normalizedAddress) as any;
+
+  if (duplicateSource) {
+    res.status(409).json({
+      error: 'DUPLICATE_SOURCE',
+      message: 'يوجد مصدر استقبال نشط مسجل بالفعل بنفس هذا الرقم أو العنوان.',
+    });
+    return;
+  }
 
   const normalizedAddressType = addressType || (normalizedProvider === 'instapay' ? 'instapay_vpa' : 'msisdn');
   if (!['msisdn', 'instapay_vpa', 'iban'].includes(normalizedAddressType)) {
@@ -1194,6 +1240,82 @@ apiRouter.post('/sources/:id/retire', requireAuth, requireRole(['owner', 'admin'
   res.json({ id: source.id, retired: true, captureRemainsAvailableForDelayedPayments: true });
 });
 
+// Update Payment Source Details and Turnover Limits (SRC-016 & SRC-015)
+apiRouter.patch('/sources/:id', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
+  const db = getDatabase();
+  const { id } = req.params;
+  const { friendlyName, dailyLimit, monthlyLimit } = req.body;
+
+  const current = db.prepare(`
+    SELECT id, friendly_name, daily_turnover_limit_minor, monthly_turnover_limit_minor
+    FROM payment_sources
+    WHERE id = ? AND organization_id = ? AND retired_at IS NULL
+  `).get(id, req.user!.organizationId) as any;
+
+  if (!current) {
+    res.status(404).json({ error: 'SOURCE_NOT_FOUND', message: 'Payment source not found' });
+    return;
+  }
+
+  let newDailyMinor = current.daily_turnover_limit_minor;
+  let newMonthlyMinor = current.monthly_turnover_limit_minor;
+
+  if (dailyLimit !== undefined) {
+    const val = Number(dailyLimit);
+    if (isNaN(val) || val <= 0) {
+      res.status(400).json({ error: 'INVALID_DAILY_LIMIT', message: 'Daily limit must be a positive number' });
+      return;
+    }
+    newDailyMinor = Math.round(val * 100);
+  }
+
+  if (monthlyLimit !== undefined) {
+    const val = Number(monthlyLimit);
+    if (isNaN(val) || val <= 0) {
+      res.status(400).json({ error: 'INVALID_MONTHLY_LIMIT', message: 'Monthly limit must be a positive number' });
+      return;
+    }
+    newMonthlyMinor = Math.round(val * 100);
+  }
+
+  if (newDailyMinor > newMonthlyMinor) {
+    res.status(400).json({
+      error: 'DAILY_EXCEEDS_MONTHLY',
+      message: 'Daily turnover limit cannot exceed monthly turnover limit',
+    });
+    return;
+  }
+
+  const updatedName = typeof friendlyName === 'string' && friendlyName.trim()
+    ? friendlyName.trim()
+    : current.friendly_name;
+
+  db.prepare(`
+    UPDATE payment_sources
+    SET friendly_name = ?,
+        daily_turnover_limit_minor = ?,
+        monthly_turnover_limit_minor = ?,
+        updated_at = datetime('now')
+    WHERE id = ? AND organization_id = ?
+  `).run(updatedName, newDailyMinor, newMonthlyMinor, id, req.user!.organizationId);
+
+  AuditService.record({
+    organizationId: req.user!.organizationId,
+    actorIdentity: req.user!.email,
+    action: 'PAYMENT_SOURCE_UPDATED',
+    resourceType: 'payment_source',
+    resourceId: id,
+    originIp: req.ip,
+  });
+
+  res.json({
+    id,
+    friendlyName: updatedName,
+    dailyLimit: newDailyMinor / 100.0,
+    monthlyLimit: newMonthlyMinor / 100.0,
+  });
+});
+
 // Safe Switch: Set as Default for Invoices (Preserves historical capture on others)
 apiRouter.post('/sources/:id/set-default', requireAuth, requireRole(['owner', 'admin']), (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
@@ -1316,16 +1438,18 @@ apiRouter.post('/rails/:id/toggle-pause', requireAuth, requireRole(['owner', 'ad
 apiRouter.get('/devices', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
   const db = getDatabase();
   const rows = db.prepare(`
-    SELECT d.id, d.payment_source_id, d.device_number, d.friendly_name, d.location, d.adapter_type,
+    SELECT d.id, d.organization_id AS account_id, c.created_by_user_id, d.payment_source_id, d.device_number, d.friendly_name, d.location, d.adapter_type,
            CASE WHEN d.status = 'revoked' THEN 'revoked'
              WHEN d.agent_version = 'webhook-v1' AND (d.last_seen_at IS NULL OR d.last_seen_at < datetime('now', '-15 minutes'))
              THEN 'offline' ELSE d.status END as status,
            d.battery_level, d.last_seen_at, d.agent_version, d.config_version,
            d.verified_at, d.notification_listener_granted, d.battery_optimization_exempt,
+           d.last_telemetry_payload,
            s.provider, s.wallet_number,
            (SELECT COUNT(*) FROM transactions t JOIN raw_events r ON r.id = t.raw_event_id
               WHERE t.organization_id = d.organization_id AND r.device_id = d.id) as txns_count
     FROM devices d
+    LEFT JOIN capture_link_tokens c ON c.device_id = d.id AND c.organization_id = d.organization_id
     LEFT JOIN payment_sources s ON s.id = d.payment_source_id AND s.organization_id = d.organization_id
     WHERE d.organization_id = ?
     ORDER BY d.created_at ASC
@@ -1364,15 +1488,21 @@ apiRouter.post('/capture-links', requireAuth, requireRole(['owner', 'admin']), (
     db.prepare(`INSERT INTO devices (id, organization_id, payment_source_id, device_number, friendly_name, location, adapter_type, status, agent_version)
                 VALUES (?, ?, ?, ?, ?, 'Phone automation', ?, 'offline', 'webhook-v1')`)
       .run(deviceId, req.user!.organizationId, paymentSourceId, deviceId, friendlyName, adapterType);
-    db.prepare(`INSERT INTO capture_link_tokens (id, token_hash, organization_id, device_id, payment_source_id)
-                VALUES (?, ?, ?, ?, ?)`)
-      .run(tokenId, hashOpaqueToken(rawToken), req.user!.organizationId, deviceId, paymentSourceId);
+    db.prepare(`INSERT INTO capture_link_tokens (id, token_hash, organization_id, created_by_user_id, device_id, payment_source_id)
+                VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(tokenId, hashOpaqueToken(rawToken), req.user!.organizationId, req.user!.id, deviceId, paymentSourceId);
     AuditService.record({ organizationId: req.user!.organizationId, actorIdentity: req.user!.email,
       action: 'CAPTURE_LINK_CREATED', resourceType: 'device', resourceId: deviceId, originIp: req.ip,
       details: { paymentSourceId, adapterType } });
     db.exec('COMMIT;');
     res.set('Cache-Control', 'no-store');
-    res.status(201).json({ deviceId, token: rawToken, endpoint: '/api/v1/capture-links/ingest' });
+    res.status(201).json({
+      accountId: req.user!.organizationId,
+      userId: req.user!.id,
+      deviceId,
+      token: rawToken,
+      endpoint: `/api/v1/capture-links/${encodeURIComponent(req.user!.organizationId)}/${encodeURIComponent(deviceId)}/ingest`,
+    });
   } catch (error) {
     db.exec('ROLLBACK;');
     console.error('[CaptureLink] Creation failed:', error);
@@ -1380,16 +1510,31 @@ apiRouter.post('/capture-links', requireAuth, requireRole(['owner', 'admin']), (
   }
 });
 
-apiRouter.post('/capture-links/ingest', (req: Request, res: Response) => {
+const ingestCaptureLink = (req: Request, res: Response) => {
   const auth = req.header('Authorization') || '';
   const token = auth.startsWith('Bearer cap_') ? auth.slice('Bearer '.length) : '';
   if (!/^cap_[A-Za-z0-9_-]{43}$/.test(token)) {
     res.status(401).json({ error: 'INVALID_CAPTURE_TOKEN' });
     return;
   }
-  const rawContent = typeof req.body?.raw_content === 'string' ? req.body.raw_content.trim() : '';
+  const rawContent = typeof req.body?.sms_message === 'string'
+    ? req.body.sms_message.trim()
+    : typeof req.body?.raw_content === 'string' ? req.body.raw_content.trim() : '';
   if (rawContent.length < 10 || rawContent.length > 2000) {
-    res.status(400).json({ error: 'INVALID_CAPTURE', message: 'raw_content must contain 10–2000 characters.' });
+    res.status(400).json({ error: 'INVALID_CAPTURE', message: 'sms_message or raw_content must contain 10–2000 characters.' });
+    return;
+  }
+  const smsNumber = req.body?.sms_number == null ? '' : req.body.sms_number;
+  const deviceModel = req.body?.device_model == null ? '' : req.body.device_model;
+  const power = req.body?.power == null ? '' : req.body.power;
+  const suppliedBattery = req.body?.battery;
+  const hasBattery = suppliedBattery !== undefined && suppliedBattery !== null && suppliedBattery !== '';
+  const battery = hasBattery ? Number(String(suppliedBattery).trim().replace(/%$/, '')) : null;
+  if (typeof smsNumber !== 'string' || smsNumber.length > 80 ||
+      typeof deviceModel !== 'string' || deviceModel.length > 120 ||
+      typeof power !== 'string' || power.length > 40 ||
+      (battery !== null && (!Number.isInteger(battery) || battery < 0 || battery > 100))) {
+    res.status(400).json({ error: 'INVALID_CAPTURE_METADATA' });
     return;
   }
   const db = getDatabase();
@@ -1404,6 +1549,11 @@ apiRouter.post('/capture-links/ingest', (req: Request, res: Response) => {
     res.status(401).json({ error: 'CAPTURE_TOKEN_REVOKED_OR_UNKNOWN' });
     return;
   }
+  if ((req.params.organizationId && req.params.organizationId !== binding.organization_id) ||
+      (req.params.deviceId && req.params.deviceId !== binding.device_id)) {
+    res.status(403).json({ error: 'CAPTURE_LINK_BINDING_MISMATCH' });
+    return;
+  }
   if (binding.organization_id !== 'org_platform_ops') {
     const sub = SubscriptionService.getOrganizationSubscription(binding.organization_id);
     if (sub.status === 'trial_expired' || sub.status === 'expired' || sub.status === 'inactive') {
@@ -1413,10 +1563,13 @@ apiRouter.post('/capture-links/ingest', (req: Request, res: Response) => {
   }
   const rawEventId = `raw_link_${crypto.randomUUID()}`;
   const capturedAt = new Date().toISOString();
-  db.prepare(`INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, processing_status)
-              VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')`)
-    .run(rawEventId, binding.organization_id, binding.device_id, binding.adapter_type, crypto.randomUUID(), capturedAt, rawContent);
-  db.prepare("UPDATE devices SET status = 'online', last_seen_at = datetime('now') WHERE id = ?").run(binding.device_id);
+  const reportedMetadata = JSON.stringify({ sms_number: smsNumber.trim(), battery, device_model: deviceModel.trim(), power: power.trim() });
+  db.prepare(`INSERT INTO raw_events (id, organization_id, device_id, adapter_type, nonce, client_timestamp, raw_payload, capture_metadata_json, processing_status)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing')`)
+    .run(rawEventId, binding.organization_id, binding.device_id, binding.adapter_type, crypto.randomUUID(), capturedAt, rawContent, reportedMetadata);
+  db.prepare(`UPDATE devices SET status = 'online', last_seen_at = datetime('now'),
+    battery_level = COALESCE(?, battery_level), last_telemetry_payload = ? WHERE id = ? AND organization_id = ?`)
+    .run(battery, reportedMetadata, binding.device_id, binding.organization_id);
   try {
     const parsed = parseEgyptianPaymentMessage(rawContent, binding.provider);
     if (!parsed.isFinancialTransaction) {
@@ -1436,7 +1589,12 @@ apiRouter.post('/capture-links/ingest', (req: Request, res: Response) => {
     db.prepare("UPDATE raw_events SET processing_status = 'review_required_processing_error' WHERE id = ?").run(rawEventId);
     res.status(500).json({ error: 'CAPTURE_PROCESSING_FAILED', rawEventId });
   }
-});
+};
+
+// Keep the old endpoint for already-configured phones. New links expose their
+// account and device IDs and reject any token bound to a different pair.
+apiRouter.post('/capture-links/ingest', ingestCaptureLink);
+apiRouter.post('/capture-links/:organizationId/:deviceId/ingest', ingestCaptureLink);
 
 // A phone browser can submit a copied bank/wallet message without a capture
 // adapter. This is an operator claim, never device or bank settlement proof.
@@ -2067,7 +2225,7 @@ apiRouter.get('/raw-events', requireAuth, requireRole(['owner', 'admin', 'manage
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
   const events = db.prepare(`
     SELECT r.id, r.adapter_type, r.client_timestamp, r.server_received_at, 
-           r.raw_payload, r.processing_status, d.friendly_name as device_name,
+           r.raw_payload, r.capture_metadata_json, r.processing_status, d.friendly_name as device_name,
            d.device_number
     FROM raw_events r
     LEFT JOIN devices d ON r.device_id = d.id
@@ -2808,20 +2966,37 @@ apiRouter.get('/api-keys', requireAuth, (req: AuthenticatedUserRequest, res: Res
 
 // Quick Setup: Auto-provision default keys if none exist
 apiRouter.get('/api-keys/quick-setup', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
-  const keys = ApiKeyService.getOrCreateDefaultKeys(req.user!.organizationId);
-  const db = getDatabase();
-  const org = db.prepare('SELECT webhook_url, webhook_secret FROM organizations WHERE id = ?').get(req.user!.organizationId) as any;
-  const sourcesCount = (db.prepare('SELECT COUNT(*) as count FROM payment_sources WHERE organization_id = ? AND is_paused_for_new_instructions = 0 AND retired_at IS NULL').get(req.user!.organizationId) as any)?.count || 0;
-  const devicesCount = (db.prepare('SELECT COUNT(*) as count FROM devices WHERE organization_id = ? AND status = "online"').get(req.user!.organizationId) as any)?.count || 0;
+  try {
+    const keys = ApiKeyService.getOrCreateDefaultKeys(req.user!.organizationId);
+    const db = getDatabase();
+    let org: any = null;
+    let sourcesCount = 0;
+    let devicesCount = 0;
 
-  res.json({
-    keys,
-    webhookUrl: org?.webhook_url || '',
-    webhookSecretConfigured: Boolean(org?.webhook_secret),
-    activeSourcesCount: sourcesCount,
-    onlineDevicesCount: devicesCount,
-    isReadyForPayments: sourcesCount > 0,
-  });
+    try {
+      org = db.prepare('SELECT webhook_url, webhook_secret FROM organizations WHERE id = ?').get(req.user!.organizationId) as any;
+    } catch {}
+
+    try {
+      sourcesCount = ApiKeyService.getActiveSourcesCount(req.user!.organizationId);
+    } catch {}
+
+    try {
+      devicesCount = (db.prepare('SELECT COUNT(*) as count FROM devices WHERE organization_id = ? AND status = "online"').get(req.user!.organizationId) as any)?.count || 0;
+    } catch {}
+
+    res.json({
+      keys,
+      webhookUrl: org?.webhook_url || '',
+      webhookSecretConfigured: Boolean(org?.webhook_secret),
+      activeSourcesCount: sourcesCount,
+      onlineDevicesCount: devicesCount,
+      isReadyForPayments: sourcesCount > 0,
+    });
+  } catch (err: any) {
+    console.error('Error in /api-keys/quick-setup:', err);
+    res.status(500).json({ error: 'QUICK_SETUP_FAILED', message: err?.message || 'Quick setup failed' });
+  }
 });
 
 // Generate new key set
@@ -3177,7 +3352,8 @@ apiRouter.post('/integrations/webhooks/test-ping', requireAuth, requireRole(['ow
       organization_id: req.user!.organizationId,
       timestamp: new Date().toISOString(),
     },
-  };
+};
+
 
   try {
     const signature = crypto.createHmac('sha256', secret).update(JSON.stringify(testEvent)).digest('hex');
@@ -3310,31 +3486,42 @@ apiRouter.post('/integrations/shopify/webhook', (req: Request, res: Response) =>
   }
 });
 
+export function getWooCommercePluginPaths(): { zipPath: string; phpPath: string } {
+  return {
+    zipPath: path.resolve(__dirname, 'templates', 'woocommerce', 'sarraf-pay.zip'),
+    phpPath: path.resolve(__dirname, 'templates', 'woocommerce', 'class-wc-gateway-sarraf.php'),
+  };
+}
+
 // Download WooCommerce Ready Plugin (ZIP for WordPress admin upload, or single PHP file)
 apiRouter.get('/integrations/woocommerce/plugin-download', (req: Request, res: Response) => {
-  const format = req.query.format as string;
-  const zipPath = path.resolve(__dirname, 'templates', 'woocommerce', 'sarraf-pay.zip');
-  const phpPath = path.resolve(__dirname, 'templates', 'woocommerce', 'class-wc-gateway-sarraf.php');
+  try {
+    const format = req.query.format as string;
+    const { zipPath, phpPath } = getWooCommercePluginPaths();
 
-  if (format === 'php' || (!fs.existsSync(zipPath) && fs.existsSync(phpPath))) {
-    if (!fs.existsSync(phpPath)) {
-      res.status(404).send('Plugin file not found');
+    if (format === 'php' || (!fs.existsSync(zipPath) && fs.existsSync(phpPath))) {
+      if (!fs.existsSync(phpPath)) {
+        res.status(404).send('Plugin file not found');
+        return;
+      }
+      res.setHeader('Content-Disposition', 'attachment; filename="class-wc-gateway-sarraf.php"');
+      res.setHeader('Content-Type', 'application/x-php');
+      fs.createReadStream(phpPath).pipe(res);
       return;
     }
-    res.setHeader('Content-Disposition', 'attachment; filename="class-wc-gateway-sarraf.php"');
-    res.setHeader('Content-Type', 'application/x-php');
-    fs.createReadStream(phpPath).pipe(res);
-    return;
-  }
 
-  if (fs.existsSync(zipPath)) {
-    res.setHeader('Content-Disposition', 'attachment; filename="sarraf-pay.zip"');
-    res.setHeader('Content-Type', 'application/zip');
-    fs.createReadStream(zipPath).pipe(res);
-    return;
-  }
+    if (fs.existsSync(zipPath)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="sarraf-pay.zip"');
+      res.setHeader('Content-Type', 'application/zip');
+      fs.createReadStream(zipPath).pipe(res);
+      return;
+    }
 
-  res.status(404).send('Plugin archive not found');
+    res.status(404).send('Plugin archive not found');
+  } catch (err: any) {
+    console.error('Error serving plugin download:', err);
+    res.status(500).json({ error: 'PLUGIN_DOWNLOAD_FAILED', message: err?.message || 'Failed to download plugin' });
+  }
 });
 
 // ==========================================
@@ -3394,43 +3581,54 @@ apiRouter.delete('/fraud/blocklist/:phone', requireAuth, (req: AuthenticatedUser
 
 // Get real-time capacity and headroom across all active payment sources
 apiRouter.get('/wallet-pool/capacity', requireAuth, (req: AuthenticatedUserRequest, res: Response) => {
-  const db = getDatabase();
-  const sources = db.prepare(`
-    SELECT id, name, type, identifier, is_active, daily_limit_minor, monthly_limit_minor
-    FROM payment_sources
-    WHERE organization_id = ? AND is_active = 1
-  `).all(req.user!.organizationId) as any[];
+  try {
+    const db = getDatabase();
+    const sources = db.prepare(`
+      SELECT id,
+             friendly_name AS name,
+             provider AS type,
+             wallet_number AS identifier,
+             (1 - is_paused_for_new_instructions) AS is_active,
+             daily_turnover_limit_minor AS daily_limit_minor,
+             monthly_turnover_limit_minor AS monthly_limit_minor
+      FROM payment_sources
+      WHERE organization_id = ? AND is_paused_for_new_instructions = 0 AND retired_at IS NULL
+    `).all(req.user!.organizationId) as any[];
 
-  const capacities = sources.map(src => {
-    const cap = LimitEngine.getSourceCapacity(req.user!.organizationId, src.id);
-    return {
-      ...src,
-      dailyLimit: fromMinor(src.daily_limit_minor || 6000000),
-      monthlyLimit: fromMinor(src.monthly_limit_minor || 20000000),
-      capacity: cap ? {
-        dailyUsage: fromMinor(cap.dailyIntakeMinor),
-        dailyRemaining: fromMinor(cap.remainingDailyMinor),
-        dailyPercent: cap.dailyPercentage,
-        monthlyUsage: fromMinor(cap.monthlyIntakeMinor),
-        monthlyRemaining: fromMinor(cap.remainingMonthlyMinor),
-        monthlyPercent: cap.monthlyPercentage,
-        isSaturated: cap.isSaturated,
-      } : null
-    };
-  });
+    const capacities = sources.map(src => {
+      const cap = LimitEngine.getSourceCapacity(req.user!.organizationId, src.id);
+      return {
+        ...src,
+        dailyLimit: fromMinor(src.daily_limit_minor || 6000000),
+        monthlyLimit: fromMinor(src.monthly_limit_minor || 20000000),
+        capacity: cap ? {
+          dailyUsage: fromMinor(cap.dailyIntakeMinor),
+          dailyRemaining: fromMinor(cap.remainingDailyMinor),
+          dailyPercent: cap.dailyPercentage,
+          monthlyUsage: fromMinor(cap.monthlyIntakeMinor),
+          monthlyRemaining: fromMinor(cap.remainingMonthlyMinor),
+          monthlyPercent: cap.monthlyPercentage,
+          isSaturated: cap.isSaturated,
+        } : null
+      };
+    });
 
-  const org = db.prepare(`
-    SELECT wallet_routing_strategy, whatsapp_business_phone, whatsapp_auto_message
-    FROM organizations
-    WHERE id = ?
-  `).get(req.user!.organizationId) as any;
+    const org = db.prepare(`
+      SELECT wallet_routing_strategy, whatsapp_business_phone, whatsapp_auto_message
+      FROM organizations
+      WHERE id = ?
+    `).get(req.user!.organizationId) as any;
 
-  res.json({
-    strategy: org?.wallet_routing_strategy || 'least_loaded',
-    whatsappBusinessPhone: org?.whatsapp_business_phone || null,
-    whatsappAutoMessage: org?.whatsapp_auto_message ?? 1,
-    sources: capacities
-  });
+    res.json({
+      strategy: org?.wallet_routing_strategy || 'least_loaded',
+      whatsappBusinessPhone: org?.whatsapp_business_phone || null,
+      whatsappAutoMessage: org?.whatsapp_auto_message ?? 1,
+      sources: capacities
+    });
+  } catch (error: any) {
+    console.error('Error in /wallet-pool/capacity:', error);
+    res.status(500).json({ error: 'CAPACITY_CHECK_FAILED', message: error?.message || 'Failed to check wallet capacity' });
+  }
 });
 
 // Update wallet pool routing strategy and WhatsApp settings

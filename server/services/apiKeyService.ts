@@ -271,4 +271,15 @@ export class ApiKeyService {
     }
     return null;
   }
+
+  /**
+   * BUG-006: Retrieves exact count of active, non-paused, non-retired payment sources for an organization
+   */
+  static getActiveSourcesCount(organizationId: string): number {
+    const db = getDatabase();
+    const row = db.prepare(
+      'SELECT COUNT(*) as count FROM payment_sources WHERE organization_id = ? AND is_paused_for_new_instructions = 0 AND retired_at IS NULL'
+    ).get(organizationId) as any;
+    return row?.count || 0;
+  }
 }
